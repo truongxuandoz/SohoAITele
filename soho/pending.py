@@ -1,4 +1,10 @@
-"""Trạng thái chờ xác nhận: bot bóc tin nhắn -> hiện preview -> chờ user bấm nút."""
+"""Trạng thái chờ xác nhận: bot bóc tin nhắn -> hiện preview -> chờ user bấm nút.
+
+Khoá lưu là `chat_id:message_id` của TIN PREVIEW, không phải chat_id trần.
+Lý do: trong group nhiều người dùng cùng lúc. Nếu chỉ khoá theo chat_id thì
+preview của người này ghi đè preview của người kia, và bấm nút trên preview
+cũ sẽ báo "hết hạn" dù vừa tạo xong.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +16,10 @@ from pathlib import Path
 from .ai import Item
 
 TTL_SECONDS = 30 * 60  # 30 phút
+
+
+def make_key(chat_id: int, message_id: int | None = None) -> str:
+    return f"{chat_id}:{message_id}" if message_id else str(chat_id)
 
 
 @dataclass
@@ -44,6 +54,8 @@ class PendingStore:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return
+        if not isinstance(raw, dict):
+            return
         for key, value in raw.items():
             try:
                 items = [Item(**it) for it in value.get("items", [])]
@@ -55,6 +67,19 @@ class PendingStore:
                 created_at=float(value.get("created_at", time.time())),
                 message_id=value.get("message_id"),
             )
+
+    def _reload_merging(self) -> None:
+        """Đọc lại file và GỘP vào RAM.
+
+        Cần thiết khi có 2 process cùng dùng file (hoặc bot vừa restart):
+        process này chưa thấy pending do process kia ghi.
+        """
+        if not self._writable:
+            return
+        disk = type(self)(self.path)
+        for key, pending in disk._data.items():
+            if key not in self._data:
+                self._data[key] = pending
 
     def _save(self) -> None:
         if not self._writable:
@@ -77,21 +102,44 @@ class PendingStore:
             # Read-only hoặc hết chỗ: giữ state trong RAM, đừng làm sập bot.
             self._writable = False
 
-    def put(self, chat_id: int, pending: Pending) -> None:
-        self._data[str(chat_id)] = pending
+    def put(self, chat_id: int, pending: Pending, message_id: int | None = None) -> str:
+        key = make_key(chat_id, message_id)
+        pending.message_id = message_id
+        # KHÔNG xoá pending khác của cùng chat: trong group mỗi người có preview
+        # riêng, xoá sẽ làm bấm nút trên preview của người khác bị "hết hạn".
+        # Pending cũ tự hết hạn theo TTL và bị _save() lọc bỏ.
+        self._data[key] = pending
         self._save()
+        return key
 
-    def get(self, chat_id: int) -> Pending | None:
-        pending = self._data.get(str(chat_id))
+    def get(self, chat_id: int, message_id: int | None = None) -> Pending | None:
+        key = make_key(chat_id, message_id)
+
+        # Thử thẳng, rồi thử khoá chat trần (tương thích dữ liệu cũ)
+        pending = self._data.get(key)
+        if pending is None:
+            pending = self._data.get(str(chat_id))
+
+        # Chưa có trong RAM -> có thể process khác vừa ghi; đọc lại file rồi thử lần nữa.
+        if pending is None:
+            self._reload_merging()
+            pending = self._data.get(key) or self._data.get(str(chat_id))
+
         if pending and pending.expired:
-            self._data.pop(str(chat_id), None)
+            self._data.pop(key, None)
             self._save()
             return None
         return pending
 
-    def pop(self, chat_id: int) -> Pending | None:
-        pending = self.get(chat_id)
-        if str(chat_id) in self._data:
-            self._data.pop(str(chat_id), None)
+    def pop(self, chat_id: int, message_id: int | None = None) -> Pending | None:
+        key = make_key(chat_id, message_id)
+        pending = self.get(chat_id, message_id)
+        removed = False
+        for k in (key, str(chat_id)):
+            if k in self._data:
+                del self._data[k]
+                removed = True
+        if removed:
             self._save()
         return pending
+

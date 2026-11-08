@@ -258,10 +258,17 @@ async def cmd_undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ────────────────────────── core flow ──────────────────────────
 
 
-async def _send_preview(message, items: list[Item], note: str) -> None:
-    await message.reply_text(
+async def _send_preview(message, items: list[Item], note: str, chat_id: int) -> None:
+    """Gửi preview rồi lưu pending gắn với message_id của chính tin preview.
+
+    Phải lưu theo message_id vì trong group có nhiều người: nếu chỉ khoá theo
+    chat_id, preview của người này ghi đè người kia và bấm nút sẽ báo hết hạn.
+    """
+    sent = await message.reply_text(
         _preview_text(items, note), reply_markup=_keyboard(), parse_mode=ParseMode.HTML
     )
+    msg_id = getattr(sent, "message_id", None)
+    PENDING.put(chat_id, Pending(items=items, note=note), message_id=msg_id)
 
 
 async def _handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
@@ -317,11 +324,10 @@ async def _handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
         )
         return
 
-    PENDING.put(chat_id, Pending(items=items, note=note))
     HB.bump("entries_parsed", len(items))
     HB.event("parsed", f"{len(items)} bút toán từ: {text[:50]}")
     HB.ping(last_message=text[:100])
-    await _send_preview(message, items, note)
+    await _send_preview(message, items, note, chat_id)
 
 
 async def on_group_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -432,56 +438,103 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     note = note or "đọc từ ảnh"
-    PENDING.put(chat_id, Pending(items=items, note=note))
-    await _send_preview(message, items, note)
+    await _send_preview(message, items, note, chat_id)
+
+
+async def _safe_edit(query, text: str, **kwargs) -> None:
+    """edit_message_text không được làm sập handler.
+
+    Telegram trả BadRequest 'Message is not modified' khi nội dung mới giống
+    hệt nội dung cũ — xảy ra khi user bấm nút 2 lần. Đó không phải lỗi thật,
+    chỉ cần bỏ qua.
+    """
+    from telegram.error import BadRequest
+
+    try:
+        await query.edit_message_text(text, **kwargs)
+    except BadRequest as exc:
+        if "not modified" in str(exc).lower():
+            return
+        raise
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
     if not _is_allowed(update):
-        await query.edit_message_text("⛔ Không có quyền.")
+        await _safe_edit(query, "⛔ Không có quyền.")
         return
 
     chat_id = update.effective_chat.id
     action = query.data
-    pending = PENDING.get(chat_id)
+    # message_id của chính tin preview đang có nút -> khoá đúng pending đó.
+    # Group có nhiều người: khoá theo chat_id trần sẽ ghi đè lẫn nhau.
+    preview_msg_id = getattr(getattr(query, "message", None), "message_id", None)
+    pending = PENDING.get(chat_id, preview_msg_id)
 
     if action == "cancel":
-        PENDING.pop(chat_id)
-        await query.edit_message_text("Đã huỷ, không ghi gì vào sổ.")
+        PENDING.pop(chat_id, preview_msg_id)
+        await _safe_edit(query, "Đã huỷ, không ghi gì vào sổ.", reply_markup=None)
         return
 
     if pending is None:
-        await query.edit_message_text("Phiên chờ đã hết hạn (30 phút). Gửi lại tin nhắn giúp mình nhé.")
+        # Không nói "hết hạn" một cách chung chung: rất có thể lần ghi trước
+        # đã thành công rồi (nút vẫn còn trên tin nhắn cũ). Nói rõ để user
+        # không tưởng mất dữ liệu và bấm lại nhiều lần.
+        await _safe_edit(
+            query,
+            "Lần ghi này đã xử lý xong rồi (hoặc đã quá 30 phút).\n"
+            "Không có gì bị mất.\n\n"
+            "• Muốn xoá dòng vừa ghi → gõ /undo\n"
+            "• Muốn ghi bút toán mới → gửi /ghi kèm nội dung",
+            reply_markup=None,
+        )
         return
 
     if action == "edit":
-        PENDING.pop(chat_id)
-        await query.edit_message_text("Ok, gửi lại tin nhắn đã sửa. Mình sẽ bóc lại từ đầu.")
+        PENDING.pop(chat_id, preview_msg_id)
+        await _safe_edit(
+            query, "Ok, gửi lại tin nhắn đã sửa. Mình sẽ bóc lại từ đầu.", reply_markup=None
+        )
         return
 
     if action == "commit":
         if STORE is None:
-            await query.edit_message_text("Sổ chưa kết nối được.")
+            await _safe_edit(query, "Sổ chưa kết nối được.")
             return
+
+        # Lấy pending ra TRƯỚC khi ghi: nếu user bấm 2 lần, lần thứ 2 sẽ
+        # không thấy pending nên không ghi trùng.
+        claimed = PENDING.pop(chat_id, preview_msg_id)
+        if claimed is None:
+            await _safe_edit(
+                query, "Bút toán này đã được ghi rồi. Gõ /undo nếu muốn xoá.", reply_markup=None
+            )
+            return
+        pending = claimed
+
         try:
             rows = [p.as_row() for p in pending.items]
             written = STORE.append(rows)
         except Exception as exc:
             log.exception("Lỗi ghi sổ")
+            # Ghi lỗi -> trả pending lại để user bấm lại được, không mất công dán.
+            PENDING.put(chat_id, pending, message_id=preview_msg_id)
             HB.bump("errors")
             HB.event("error", f"ghi sổ: {exc}")
             HB.ping(last_error=f"ghi sổ: {exc}")
-            await query.edit_message_text(f"⚠️ Lỗi ghi sổ: {exc}")
+            await _safe_edit(query, f"⚠️ Lỗi ghi sổ: {exc}\nBấm lại nút để thử lại.")
             return
-        PENDING.pop(chat_id)
+
         span = f"{written[0]}–{written[-1]}" if len(written) > 1 else str(written[0])
         HB.bump("entries_written", len(written))
         HB.event("written", f"{len(written)} dòng → dòng {span}")
         HB.ping()
-        await query.edit_message_text(
-            f"✅ Đã ghi {len(written)} dòng vào sổ (dòng {span}).\nGõ /undo để xoá nếu sai."
+        # reply_markup=None: bỏ nút sau khi ghi xong, tránh bấm lại lần 2.
+        await _safe_edit(
+            query,
+            f"✅ Đã ghi {len(written)} dòng vào sổ (dòng {span}).\nGõ /undo để xoá nếu sai.",
+            reply_markup=None,
         )
 
 

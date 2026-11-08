@@ -4,6 +4,69 @@ Ghi lại các lỗi thật đã xảy ra khi đưa bot vào sổ thật, để 
 
 ---
 
+## 0. "Phiên chờ đã hết hạn" ngay sau khi hiện preview (GROUP)
+
+### Triệu chứng
+Bấm nút **Ghi sổ** trong group → bot trả *"Phiên chờ đã hết hạn (30 phút). Gửi lại tin nhắn giúp mình nhé."* — dù vừa gửi `/ghi` vài giây trước.
+
+### Dữ liệu có mất không?
+**KHÔNG.** Log chứng minh cả 3 bút toán đều ghi thành công:
+
+```
+14:59:34  message: p304 tt 500000 thu tk soho
+15:00:41  written: 1 dòng → dòng 664        ← ghi THẬT
+15:00:50  message: p304 tt 500000 thu tk soho
+15:01:02  written: 1 dòng → dòng 665        ← ghi THẬT
+15:01:47  message: p203 tt 100000 thu tk kim
+15:02:02  written: 1 dòng → dòng 666        ← ghi THẬT
+15:02:04  error: Message is not modified     ← chỉ là bấm lại nút cũ
+```
+
+### Ba nguyên nhân thật
+
+**1. Khoá pending theo `chat_id` trần — sai trong group**
+
+Group có nhiều người. Cả hai gửi `/ghi` → cái sau **ghi đè** cái trước trong
+`pending.json`. Bấm nút trên preview cũ → không tìm thấy → "hết hạn".
+
+```
+Trước: {"-5591223295": {...}}          ← 1 khoá cho cả group
+Sau:   {"-5591223295:1001": {...},     ← mỗi preview 1 khoá
+        "-5591223295:1002": {...}}
+```
+
+**2. Bấm nút 2 lần → `BadRequest: Message is not modified`**
+
+Lần 1 ghi xong, nút vẫn còn trên tin nhắn. Lần 2 Telegram từ chối vì nội dung
+không đổi → exception làm sập handler.
+
+Sửa: bọc trong `_safe_edit()` để bỏ qua lỗi này, và `reply_markup=None` sau khi
+ghi xong để bỏ nút.
+
+**3. Message "hết hạn" gây hoang mang**
+
+User tưởng mất dữ liệu nên bấm lại nhiều lần.
+
+Sửa: nói rõ *"Lần ghi này đã xử lý xong rồi... Không có gì bị mất"* + gợi ý `/undo`.
+
+### Thêm: chống ghi trùng
+
+`PENDING.pop()` giờ chạy **trước** khi ghi sổ. Bấm 2 lần → lần 2 không thấy
+pending → không ghi trùng. Trước đây `pop()` sau khi ghi nên có cửa sổ double-write.
+
+### Thêm: pending trả lại khi lỗi
+
+Ghi sổ lỗi (Sheets API 500) → pending được `put()` lại để user bấm thử lại,
+không phải dán lại tin nhắn.
+
+### Regression test
+`tests/test_pending_group.py` (10 test): 2 người cùng group không ghi đè nhau,
+`pop()` chỉ xoá đúng preview được bấm, bấm 2 lần không ghi trùng,
+`Message is not modified` được bỏ qua, nút bị bỏ sau khi ghi, lỗi append trả lại
+pending, đọc lại file khi process khác ghi, tương thích khoá cũ.
+
+---
+
 ## 1. `PendingStore` crash trên filesystem read-only
 
 **Triệu chứng (Vercel/Render):**
