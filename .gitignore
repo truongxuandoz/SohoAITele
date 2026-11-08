@@ -1,0 +1,23 @@
+# Secrets
+.env
+credentials/*
+!credentials/.gitkeep
+*.json
+!package.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.pytest_tmp/
+pytest-of-Administrator/
+
+# Dữ liệu sinh ra khi chạy / backup chứa dữ liệu thật
+data/pending.json
+data/*.xlsx
+backup_*.json
+
+# Tool cache
+graft/
+.ruff_cache/

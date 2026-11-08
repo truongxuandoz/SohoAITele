@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: soho-ai-bot
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m soho.bot
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: SHEET_BACKEND
+        value: google
+      - key: ENABLE_HEALTH_SERVER
+        value: "true"
+      # Các biến bí mật: đặt trong Dashboard > Environment, KHÔNG commit:
+      #   TELEGRAM_BOT_TOKEN
+      #   ALLOWED_CHAT_ID
+      #   SPREADSHEET_ID
+      #   WORKSHEET_NAME
+      #   GOOGLE_CREDENTIALS_JSON   (dán nguyên nội dung file service_account.json)
+      #   AI_API_KEY
+      #   AI_BASE_URL
+      #   AI_MODEL
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: ALLOWED_CHAT_ID
+        sync: false
+      - key: SPREADSHEET_ID
+        sync: false
+      - key: WORKSHEET_NAME
+        sync: false
+      - key: GOOGLE_CREDENTIALS_JSON
+        sync: false
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_BASE_URL
+        sync: false
+      - key: AI_MODEL
+        sync: false

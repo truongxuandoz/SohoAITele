@@ -1,0 +1,36 @@
+2026-11-08 14:20:57,227 INFO     __main__: Đã đặt menu lệnh: ghi, id, tail, undo, start, help
+2026-11-08 14:20:59,361 INFO     __main__: Kết nối sổ OK: Google Sheet: 'soho boutique' / tab 'Thu Chi '
+2026-11-08 14:20:59,551 INFO     telegram.ext.Application: Application started
+2026-11-08 14:21:19,429 INFO     __main__: RAW update: chat=-5591223295 type=group text='/undo' entities=[(<MessageEntityType.BOT_COMMAND>, 0, 5)]
+2026-11-08 14:21:19,429 INFO     __main__: chat_id=-5591223295 type=group title=Soho AI Thu Chi user=@truongxuando
+2026-11-08 14:21:19,429 INFO     __main__: chat_id=-5591223295 type=group user=@truongxuando
+2026-11-08 14:21:41,869 INFO     __main__: RAW update: chat=-5591223295 type=group text='/ghi' entities=[(<MessageEntityType.BOT_COMMAND>, 0, 4)]
+2026-11-08 14:21:41,871 INFO     __main__: chat_id=-5591223295 type=group title=Soho AI Thu Chi user=@truongxuando
+2026-11-08 14:21:41,871 INFO     __main__: chat_id=-5591223295 type=group user=@truongxuando
+2026-11-08 14:21:42,289 INFO     __main__: RAW update: chat=-5591223295 type=group text='/ghi' entities=[(<MessageEntityType.BOT_COMMAND>, 0, 4)]
+2026-11-08 14:21:42,289 INFO     __main__: chat_id=-5591223295 type=group title=Soho AI Thu Chi user=@truongxuando
+2026-11-08 14:21:42,289 INFO     __main__: chat_id=-5591223295 type=group user=@truongxuando
+2026-11-08 14:22:02,071 INFO     __main__: RAW update: chat=-5591223295 type=group text='/ghip304 tt 1.480.000 chi kim' entities=[(<MessageEntityType.CODE>, 4, 25)]
+2026-11-08 14:22:02,071 INFO     __main__: chat_id=-5591223295 type=group title=Soho AI Thu Chi user=@truongxuando
+2026-11-08 14:22:02,071 INFO     __main__: chat_id=-5591223295 type=group title=Soho AI Thu Chi user=@truongxuando
+2026-11-08 14:22:19,853 INFO     __main__: RAW update: chat=-5591223295 type=group text='/start@SohoBoutiqueQNbot' entities=[(<MessageEntityType.BOT_COMMAND>, 0, 24)]
+2026-11-08 14:22:19,853 INFO     __main__: chat_id=-5591223295 type=group title=Soho AI Thu Chi user=@truongxuando
+2026-11-08 14:22:19,853 INFO     __main__: chat_id=-5591223295 type=group user=@truongxuando
+2026-11-08 14:22:22,456 INFO     __main__: RAW update: chat=-5591223295 type=group text='/ghi' entities=[(<MessageEntityType.BOT_COMMAND>, 0, 4)]
+2026-11-08 14:22:22,456 INFO     __main__: chat_id=-5591223295 type=group title=Soho AI Thu Chi user=@truongxuando
+2026-11-08 14:22:22,457 INFO     __main__: chat_id=-5591223295 type=group user=@truongxuando
+2026-11-08 14:22:30,840 INFO     __main__: RAW update: chat=-5591223295 type=group text='/ghi p304 tt 1.480.000 chi soho' entities=[(<MessageEntityType.BOT_COMMAND>, 0, 4), (<MessageEntityType.CODE>, 5, 26)]
+2026-11-08 14:22:30,840 INFO     __main__: chat_id=-5591223295 type=group title=Soho AI Thu Chi user=@truongxuando
+2026-11-08 14:22:30,840 INFO     __main__: chat_id=-5591223295 type=group user=@truongxuando
+2026-11-08 14:22:30,840 INFO     __main__: chat_id=-5591223295 type=group user=@truongxuando
+2026-11-08 14:22:48,453 INFO     __main__: RAW update: chat=-5591223295 type=group text='/ghi p304 tt 1.480.000 chi soho' entities=[(<MessageEntityType.BOT_COMMAND>, 0, 4), (<MessageEntityType.CODE>, 5, 26)]
+2026-11-08 14:22:48,453 INFO     __main__: chat_id=-5591223295 type=group title=Soho AI Thu Chi user=@truongxuando
+2026-11-08 14:22:48,453 INFO     __main__: chat_id=-5591223295 type=group user=@truongxuando
+2026-11-08 14:22:48,453 INFO     __main__: chat_id=-5591223295 type=group user=@truongxuando
+2026-11-08 14:24:18,227 INFO     __main__: RAW update: chat=-5591223295 type=group text='/ghi p304 tt 1440000 chi tk kim' entities=[(<MessageEntityType.BOT_COMMAND>, 0, 4)]
+2026-11-08 14:24:18,228 INFO     __main__: chat_id=-5591223295 type=group title=Soho AI Thu Chi user=@truongxuando
+2026-11-08 14:24:18,228 INFO     __main__: chat_id=-5591223295 type=group user=@truongxuando
+2026-11-08 14:24:18,228 INFO     __main__: chat_id=-5591223295 type=group user=@truongxuando
+2026-11-08 14:25:36,350 INFO     __main__: RAW update: chat=-5591223295 type=group text='/undo' entities=[(<MessageEntityType.BOT_COMMAND>, 0, 5)]
+2026-11-08 14:25:36,350 INFO     __main__: chat_id=-5591223295 type=group title=Soho AI Thu Chi user=@truongxuando
+2026-11-08 14:25:36,350 INFO     __main__: chat_id=-5591223295 type=group user=@truongxuando
