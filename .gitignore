@@ -21,3 +21,5 @@ backup_*.json
 # Tool cache
 graft/
 .ruff_cache/
+data/bot.log
+
