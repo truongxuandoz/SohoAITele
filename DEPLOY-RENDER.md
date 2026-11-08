@@ -1,240 +1,200 @@
-# Deploy bot lên Render (free tier)
+# Deploy Render — hướng dẫn cho repo này
 
-Tài liệu này dành cho **bot Telegram (polling)**, đã sửa code để chạy được trên Render free.
-
-> Tóm tắt: **được, nhưng free tier có 1 cái bẫy phải xử lý** — service ngủ sau 15 phút.
-> Xem [mục 4](#4-chống-ngủ-15-phút-bắt-buộc).
+Bot local đã tắt. Làm theo đúng thứ tự dưới đây.
 
 ---
 
-## 1. Free tier được gì, mất gì
+## Trước khi bắt đầu
 
-Theo [docs Render](https://render.com/docs/free):
+✅ Bot local đã tắt (không còn process `soho.bot`)
+✅ Code đã push lên `github.com/truongxuandoz/SohoAITele`
+✅ `render.yaml` có sẵn, đã kiểm chứng bằng giả lập Render
 
-| | Free |
-|---|---|
-| CPU / RAM | 0.1 CPU / 512 MB |
-| Giá | $0 |
-| Giờ/tháng | 750 giờ mỗi workspace |
-| **Ngủ sau 15 phút không có request** | ⚠️ **Có** — thức lại mất ~1 phút |
-| Filesystem | Tạm thời — mất khi deploy/restart/ngủ |
-| Persistent disk | ❌ Không |
-| Custom domain | ✅ 2 cái |
-| HTTPS | ✅ tự động |
-
-**750 giờ ≈ 31 ngày.** Một service chạy 24/7 vừa đúng 744 giờ → lọt. Nhưng nếu bạn có **2 service free** chạy cùng lúc thì hết quota giữa tháng và Render treo cả hai.
-
-**Điểm quan trọng:** bot Telegram dùng **polling** — nó chủ động hỏi Telegram, không nhận request từ ngoài. Render thấy "không có inbound traffic" → **cho ngủ sau 15 phút** → bot chết. Phải có pinger (mục 4).
+⚠️ **Chỉ chạy bot ở 1 nơi.** Telegram chỉ cho 1 poller — nếu vừa local vừa Render,
+tin nhắn sẽ mất ngẫu nhiên.
 
 ---
 
-## 2. Sửa code đã làm sẵn
-
-Tôi đã sửa 3 chỗ khiến bot không chạy được trên cloud:
-
-| Trước | Sau |
-|---|---|
-| `PendingStore` gọi `mkdir()` lúc import → crash | Bắt `OSError`, fallback sang `/tmp`, hoạt động tiếp trong RAM |
-| Credentials chỉ đọc từ **file** (bị `.gitignore` chặn) | Thêm `GOOGLE_CREDENTIALS_JSON` — dán JSON vào env var |
-| `run_polling()` không có HTTP server | Thêm health server `/healthz` trên `PORT` + hỗ trợ webhook |
-
-Riêng **backend `xlsx` bị chặn có chủ đích** trên cloud: filesystem tạm thời, ghi xong mất. `check_setup.py` sẽ báo lỗi nếu bạn chọn nó.
-
----
-
-## 3. Deploy từng bước
-
-### 3.1 Đẩy code lên GitHub
+## Bước 1 — Lấy giá trị env
 
 ```powershell
 cd C:\Users\Administrator\Documents\GitHub\SohoAITele
-git add .
-git commit -m "SoHo AI bot"
-git remote add origin https://github.com/<user>/<repo>.git
-git push -u origin main
+.\.venv\Scripts\python.exe render_env.py
 ```
 
-Kiểm tra `.env` **không** bị commit:
+In ra danh sách biến (secret được che). Để lấy JSON credentials:
+
 ```powershell
-git ls-files | Select-String "\.env$"
-# phải KHÔNG có kết quả
+.\.venv\Scripts\python.exe render_env.py --json
 ```
 
-### 3.2 Tạo service trên Render
+Output là **1 dòng JSON** — copy toàn bộ, đó là giá trị cho `GOOGLE_CREDENTIALS_JSON`.
 
-**Cách A — Blueprint (dùng `render.yaml` có sẵn)**
+> Nếu cần xem giá trị đầy đủ: `render_env.py --full` (cẩn thận lộ secret trên màn hình).
 
-1. [dashboard.render.com](https://dashboard.render.com) → **New → Blueprint**
-2. Chọn repo → Render đọc `render.yaml` → **Apply**
+---
 
-**Cách B — thủ công**
+## Bước 2 — Tạo service trên Render
 
-1. **New → Web Service** → chọn repo
-2. Điền:
+1. [dashboard.render.com](https://dashboard.render.com) → đăng nhập bằng GitHub
+2. **New** → **Blueprint**
+3. Chọn repo `truongxuandoz/SohoAITele`
+4. Render đọc `render.yaml` → bấm **Apply**
 
-| Field | Giá trị |
+> Nếu không thấy Blueprint, dùng **New → Web Service**:
+> | Field | Giá trị |
+> |---|---|
+> | Language | Python 3 |
+> | Region | Singapore |
+> | Build Command | `pip install -r requirements.txt` |
+> | Start Command | `python -m soho.bot` |
+> | Plan | Free |
+> | Health Check Path | `/healthz` |
+
+---
+
+## Bước 3 — Điền Environment Variables
+
+Vào service → tab **Environment** → **Add Environment Variable**.
+
+Dán từng cặp từ output `render_env.py`:
+
+| Key | Value |
 |---|---|
-| Language | `Python 3` |
-| Region | `Singapore` (gần VN nhất) |
-| Build Command | `pip install -r requirements.txt` |
-| Start Command | `python -m soho.bot` |
-| Plan | **Free** |
-| Health Check Path | `/healthz` |
-
-### 3.3 Điền biến môi trường
-
-Vào **Environment** của service, thêm:
-
-| Key | Giá trị |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | token từ @BotFather |
-| `ALLOWED_CHAT_ID` | chat_id của bạn (xem README mục 2) |
-| `SPREADSHEET_ID` | phần giữa `/d/` và `/edit` |
-| `WORKSHEET_NAME` | tên tab, ví dụ `SoHo` |
-| `GOOGLE_CREDENTIALS_JSON` | **dán nguyên nội dung** `service_account.json` |
+| `TELEGRAM_BOT_TOKEN` | từ @BotFather |
+| `ALLOWED_CHAT_ID` | `6241137644,-5591223295` |
+| `SPREADSHEET_ID` | `1yC47kVvWHvHfJARloXxUgf1Aacnf-YxWB8Vy5yBgNdI` |
+| `WORKSHEET_NAME` | `Thu Chi` |
+| `GOOGLE_CREDENTIALS_JSON` | 1 dòng JSON từ `--json` |
 | `AI_API_KEY` | `sk-...` |
 | `AI_BASE_URL` | `https://api.hermesgate.app/v1` |
 | `AI_MODEL` | `gemini-3.8-flash-high` |
-| `SHEET_BACKEND` | `google` |
-| `ENABLE_HEALTH_SERVER` | `true` |
 
-> ⚠️ **Đừng set `PORT`.** Render tự set. Code đã đọc biến đó.
+Blueprints đã khai báo sẵn `SHEET_BACKEND=google` và `ENABLE_HEALTH_SERVER=true`.
 
-**Cách dán `GOOGLE_CREDENTIALS_JSON` cho đúng:**
+> ℹ️ `WORKSHEET_NAME=Thu Chi` — tab thật tên `"Thu Chi "` có **dấu cách cuối**.
+> Code tự khớp tên kể cả thừa/thiếu dấu cách, nên điền `Thu Chi` là được.
 
-```powershell
-# In ra 1 dòng JSON đã nén, copy toàn bộ rồi dán vào Render
-(Get-Content credentials/service_account.json -Raw | ConvertFrom-Json | ConvertTo-Json -Compress)
-```
+> ⚠️ **KHÔNG set `PORT`.** Render tự set. Code đã đọc biến đó.
 
-JSON phải giữ nguyên `\n` trong `private_key`. `ConvertTo-Json` xử lý đúng việc này.
+---
 
-### 3.4 Deploy
+## Bước 4 — Deploy và kiểm tra
 
-Bấm **Manual Deploy → Deploy latest commit**. Theo dõi log, phải thấy:
+Bấm **Manual Deploy → Deploy latest commit**.
+
+Theo dõi **Logs**, phải thấy:
 
 ```
-INFO  Kết nối sổ OK: Google Sheet: 'Sổ thu chi' / tab 'SoHo'
+INFO  Đã đặt menu lệnh: ghi, id, tail, undo, start, help
+INFO  Kết nối sổ OK: Google Sheet: 'soho boutique' / tab 'Thu Chi '
 INFO  Bot đang chạy (model gemini-3.8-flash-high @ ...)
 INFO  Health server trên cổng 10000 (GET /healthz)
 ```
 
-Rồi nhắn thử bot trên Telegram.
+Kiểm tra health:
+```powershell
+curl.exe -s "https://<service>.onrender.com/healthz"
+```
+Phải trả `ok`.
+
+Rồi nhắn thử bot trên Telegram: `/id`
 
 ---
 
-## 4. Chống ngủ 15 phút (BẮT BUỘC)
+## Bước 5 — Chống ngủ 15 phút (BẮT BUỘC)
 
-Không làm bước này → bot im lặng sau 15 phút, mất ~1 phút mới trả lời.
+Render free **spin down sau 15 phút không có traffic**. Bot dùng polling nên
+Render thấy "không ai gọi" → cho ngủ → bot chết.
 
-### Cách 1 — cron-job.org (free, dễ nhất)
+### cron-job.org (free)
 
-1. [cron-job.org](https://cron-job.org) → đăng ký free
+1. [cron-job.org](https://cron-job.org) → đăng ký
 2. **Create cronjob**:
    - URL: `https://<service>.onrender.com/healthz`
    - Schedule: **every 10 minutes**
-3. Save → bấm **TEST RUN** phải trả `200 ok`
+3. Save → **TEST RUN** phải trả `200 ok`
 
-### Cách 2 — UptimeRobot (free)
-
-1. [uptimerobot.com](https://uptimerobot.com) → **Add New Monitor**
-2. Monitor Type: `HTTP(s)`
-3. URL: `https://<service>.onrender.com/healthz`
-4. Interval: `10 minutes`
-
-> Cả hai đều free và đủ dùng. Đặt 10 phút vì Render ngủ ở phút 15 — cần biên an toàn.
-
-### Vì sao `/healthz` chứ không phải `/`?
-
-`/` trên Render free khi service đang ngủ sẽ trả trang loading của Render. `/healthz` do code mình phục vụ, trả `200 ok` ngay, và **đánh thức** service.
-
-### Kiểm tra pinger có tác dụng
+### Kiểm tra pinger hoạt động
 
 ```powershell
-# Gọi /healthz, đo thời gian phản hồi
 Measure-Command { Invoke-WebRequest "https://<service>.onrender.com/healthz" -UseBasicParsing }
 ```
 
-- Lần đầu sau khi ngủ: ~60 giây (đang thức dậy)
+- Lần đầu sau ngủ: ~60 giây
 - Các lần sau: < 1 giây
 
 Nếu lần nào cũng ~60s → pinger không chạy.
 
 ---
 
-## 5. Hạn chế cần biết
+## Sau khi deploy xong
 
-### State `pending` mất khi restart
-
-`data/pending.json` nằm trên filesystem tạm. Render restart → mất. Nghĩa là:
-
-- Bạn gõ tin nhắn, bot hiện preview, **chưa bấm Ghi sổ**
-- Render restart (deploy mới, hoặc hết RAM)
-- Bấm **Ghi sổ** → "Phiên chờ đã hết hạn"
-
-**Cách tránh:** bấm Ghi sổ ngay sau khi xem preview. Với sổ thu chi thì đây là thói quen tốt.
-
-> Muốn state bền thật: thêm Upstash Redis (free 10k lệnh/ngày) và đổi `PendingStore` sang đọc/ghi Redis. Code đã tách riêng class này nên chỉ sửa 1 file.
-
-### 0.1 CPU / 512 MB
-
-Đủ cho bot này (chủ yếu chờ mạng). Nhưng nếu bạn gửi **ảnh sổ tay**, model vision cần thêm thời gian — có thể chạm giới hạn. Theo dõi tab **Metrics**.
-
-### Render có thể restart bất cứ lúc nào
-
-Free tier không cam kết uptime. Bot tự khởi động lại (polling loop), nhưng tin nhắn gửi đúng lúc restart có thể mất.
-
-### Không có Shell/SSH trên free
-
-Không vào được container để debug. Dùng **Logs** trong Dashboard.
+1. **Tắt bot local** (đã tắt) — đừng chạy lại
+2. Thử trong Telegram:
+   - Chat riêng: `p304 tt 1.480.000 chi soho`
+   - Group: `/ghi p304 tt 1.480.000 chi soho`
+3. Kiểm tra Google Sheet có dòng mới đúng chỗ (chèn trước khối Tổng)
 
 ---
 
-## 6. Phương án khác nếu Render free không đủ
-
-| Nền tảng | Giá | Ưu | Nhược |
-|---|---|---|---|
-| **Render free** | $0 | Dễ nhất, có `render.yaml` sẵn | Ngủ 15 phút, cần pinger |
-| **Render Starter** | $7/tháng | Không ngủ, ổn định | Tốn tiền |
-| **Fly.io** | ~$0–2 | Không ngủ nếu cấu hình đúng | Cần CLI, phức tạp hơn |
-| **VPS (Vultr/DigitalOcean)** | $4–6/tháng | Toàn quyền, không giới hạn | Tự cài, tự bảo trì |
-| **Railway** | $5 credit/tháng | Rất dễ, không ngủ | Hết credit thì dừng |
-| **Máy nhà + Cloudflare Tunnel** | $0 | Free, không ngủ, toàn quyền | Máy phải bật 24/7 |
-
-**Khuyến nghị:** bắt đầu bằng **Render free + cron-job.org**. Nếu 1 tháng thấy ổn định và dùng thật, nâng lên **Render Starter $7** — bỏ được pinger và state bền hơn.
-
----
-
-## 7. Troubleshooting
+## Sự cố thường gặp
 
 | Triệu chứng | Nguyên nhân | Sửa |
 |---|---|---|
-| Deploy fail: `ModuleNotFoundError` | Thiếu package trong `requirements.txt` | Thêm vào rồi push |
-| Log: `Không kết nối được sổ: ...` | `GOOGLE_CREDENTIALS_JSON` sai định dạng | Nén lại bằng lệnh ở 3.3 |
-| Log: `403 The caller does not have permission` | Chưa share sheet cho `client_email` | Share quyền **Editor** |
-| Bot im sau ~15 phút | Chưa có pinger | Làm mục 4 |
-| Bot không trả lời gì | Đang chạy 2 nơi (máy local + Render) | Tắt bản local — Telegram chỉ cho 1 poller |
-| `⛔ Chat này chưa được cấp quyền` | `ALLOWED_CHAT_ID` chưa đúng | Nhắn `/id` cho bot, copy số vào env, redeploy |
+| Build fail: `ModuleNotFoundError` | Thiếu package | Kiểm tra `requirements.txt` |
+| Log: `Không kết nối được sổ` | `GOOGLE_CREDENTIALS_JSON` sai | Lấy lại bằng `render_env.py --json` |
+| `403 The caller does not have permission` | Chưa share sheet | Share cho `soho-bot@internet-cafe-452807.iam.gserviceaccount.com` quyền **Editor** |
+| Bot im sau ~15 phút | Chưa có pinger | Làm bước 5 |
+| Bot không trả lời gì | 2 nơi cùng chạy | Tắt bản local |
 | `/healthz` trả 404 | `ENABLE_HEALTH_SERVER` chưa `true` | Thêm env var, redeploy |
-| Hết 750 giờ giữa tháng | Có nhiều service free | Xoá bớt service không dùng |
-| `Phiên chờ đã hết hạn` | Service restart giữa lúc preview | Bấm Ghi sổ ngay |
+| Hết 750 giờ giữa tháng | Nhiều service free | Xoá bớt service không dùng |
 
-### Xem log
+### Xem log trên Render
 
-Dashboard → service → **Logs**. Hoặc dùng CLI:
+Dashboard → service → **Logs**. Hoặc:
+
 ```powershell
+# cài Render CLI nếu cần
 render logs --resources srv-xxxxx --tail
 ```
 
 ---
 
-## 8. Checklist trước khi bấm Deploy
+## Đã kiểm chứng trước khi deploy
 
-- [ ] `.env` **không** có trong git (`git ls-files | Select-String "\.env$"` → trống)
-- [ ] Đã có `GOOGLE_CREDENTIALS_JSON` (1 dòng nén)
-- [ ] Đã share Google Sheet cho `client_email` quyền **Editor**
-- [ ] `SHEET_BACKEND=google` (không phải `xlsx`)
-- [ ] `ENABLE_HEALTH_SERVER=true`
-- [ ] KHÔNG set `PORT`
-- [ ] Đã tạo cron-job.org gọi `/healthz` mỗi 10 phút
-- [ ] Đã tắt bot chạy ở máy local
+Tôi đã chạy `simulate_render.py` — giả lập môi trường Render thật
+(không có file `.env`, chỉ có env vars + `PORT`):
+
+```
+=== 1. Kiểm tra config đọc từ ENV (không cần .env) ===
+OK
+
+=== 2. Khởi động bot như Render sẽ làm ===
+  | Đã đặt menu lệnh: ghi, id, tail, undo, start, help
+  | Kết nối sổ OK: Google Sheet: 'soho boutique' / tab 'Thu Chi '
+  [OK] GET /healthz -> 200 ok
+
+=== SẴN SÀNG DEPLOY RENDER ===
+```
+
+Nghĩa là code đã sẵn sàng — không cần sửa gì thêm.
+
+---
+
+## Hạn chế cần biết trên Render free
+
+| | |
+|---|---|
+| CPU / RAM | 0.1 CPU / 512 MB |
+| Giờ/tháng | 750 (≈ 31 ngày; 1 service 24/7 vừa đủ) |
+| Ngủ sau 15 phút idle | ⚠️ Có — cần pinger |
+| Filesystem | Tạm thời — `data/pending.json` mất khi restart |
+| Persistent disk | ❌ Không |
+| HTTPS | ✅ Tự động |
+
+**`pending.json` mất khi restart:** nếu bot hiện preview mà chưa bấm Ghi sổ, rồi Render restart,
+bấm Ghi sổ sẽ báo "hết hạn". Tránh bằng cách bấm Ghi sổ ngay.
+
+Muốn state bền: thêm Upstash Redis (free 10k lệnh/ngày) và đổi `PendingStore`
+sang Redis — code đã tách class này nên chỉ sửa 1 file.
