@@ -67,6 +67,88 @@ pending, đọc lại file khi process khác ghi, tương thích khoá cũ.
 
 ---
 
+## 0b. Ảnh trong GROUP không được xử lý ("nhắn riêng thì được")
+
+### Triệu chứng
+Gửi ảnh hoá đơn chuyển khoản vào group → bot **im lặng hoàn toàn**.
+Gửi cùng ảnh vào chat riêng → bot đọc và bóc bình thường.
+
+### Chẩn đoán
+Log cho thấy ảnh **đã tới bot** nhưng không handler nào xử lý:
+
+```
+15:41:05  RAW update: chat=-5591223295 type=group text='' entities=[]
+15:41:33  RAW update: chat=-5591223295 type=group text='' entities=[]
+```
+
+`text=''` và `entities=[]` là dấu hiệu của **ảnh** (photo không có text).
+Không có dòng `HANDLER` nào sau đó, và không có lỗi.
+
+### Nguyên nhân
+`on_group_text` kiểm tra **@mention TRƯỚC** khi kiểm tra photo:
+
+```python
+# CODE SAI
+if not (mentioned or replied_to_me):
+    return                      # ← ảnh bị chặn ở đây
+...
+if message.photo:
+    await on_photo(...)
+```
+
+Ảnh **không thể chứa mention dạng text** — entities luôn rỗng. Nên điều kiện
+`mentioned` luôn False → `return` → ảnh không bao giờ được xử lý.
+
+Chat riêng không qua `on_group_text` mà qua `on_photo` trực tiếp → chạy được.
+Đó là lý do "nhắn riêng thì được, group thì không".
+
+### Sửa
+Đưa kiểm tra photo lên **trước** điều kiện mention:
+
+```python
+# CODE ĐÚNG
+if message.photo:
+    await on_photo(update, context)   # ảnh không cần mention
+    return
+
+if not (mentioned or replied_to_me):
+    return
+```
+
+`on_photo` vẫn tự gọi `_guard()` nên group lạ vẫn bị chặn.
+
+### Sửa thêm: mime thật của ảnh
+Code cũ hardcode `mime="image/jpeg"`. Thêm `_guess_mime()` đọc magic bytes:
+
+| Magic bytes | mime |
+|---|---|
+| `\x89PNG\r\n\x1a\n` | `image/png` |
+| `\xff\xd8\xff` | `image/jpeg` |
+| `RIFF....WEBP` | `image/webp` |
+| `GIF87a` / `GIF89a` | `image/gif` |
+
+Không tin hoàn toàn mime Telegram báo — có trường hợp trả `application/octet-stream`.
+
+### Kiểm chứng model CÓ vision
+Trước khi sửa code, đã test trực tiếp API với ảnh hoá đơn thật:
+
+```
+AI note:
+Bóc được 1 bút toán:
+  1. LE NGUYEN DUY DUONG chuyen tien den KH HO KINH DOANH SOHO BOUTIQUE
+     · ngày 13/08/2026 · THU 960.000 · [soho]
+Nhan ra 960.000: CO
+```
+
+Nghĩa là **model không phải nguyên nhân** — lỗi hoàn toàn ở code bot.
+
+### Regression test
+`tests/test_photo_group.py` (10 test): ảnh group không mention vẫn xử lý, ảnh có
+caption, text không mention vẫn im lặng, chat riêng vẫn chạy, đoán mime cho
+PNG/JPEG/WebP/GIF/octet-stream.
+
+---
+
 ## 1. `PendingStore` crash trên filesystem read-only
 
 **Triệu chứng (Vercel/Render):**
