@@ -24,6 +24,7 @@ from telegram.ext import (
 
 from .ai import Item, parse_image, parse_message
 from .config import config
+from .dates import ensure_date_present
 from .heartbeat import Heartbeat
 from .money import format_money
 from .pending import Pending, PendingStore
@@ -104,7 +105,7 @@ def _today_date():
         return datetime.now().date()
 
 
-def _preview_text(items: list[Item], note: str) -> str:
+def _preview_text(items: list[Item], note: str, date_notes: list[str] | None = None) -> str:
     lines = [f"<b>Có {len(items)} bút toán chờ ghi sổ:</b>", ""]
     total_thu = sum(i.thu or 0 for i in items)
     total_chi = sum(i.chi or 0 for i in items)
@@ -117,6 +118,10 @@ def _preview_text(items: list[Item], note: str) -> str:
         lines.append(f"Tổng chi: <b>{format_money(total_chi)}</b>")
     if note:
         lines.append(f"<i>AI: {_esc(note)}</i>")
+    if date_notes:
+        lines.append("")
+        for dn in date_notes:
+            lines.append(f"<i>{_esc(dn)}</i>")
     lines.append("")
     lines.append("Bấm <b>Ghi sổ</b> để ghi, hoặc <b>Sửa</b> để dán lại cho đúng.")
     return "\n".join(lines)
@@ -349,14 +354,22 @@ async def cmd_undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ────────────────────────── core flow ──────────────────────────
 
 
-async def _send_preview(message, items: list[Item], note: str, chat_id: int) -> None:
+async def _send_preview(
+    message,
+    items: list[Item],
+    note: str,
+    chat_id: int,
+    date_notes: list[str] | None = None,
+) -> None:
     """Gửi preview rồi lưu pending gắn với message_id của chính tin preview.
 
     Phải lưu theo message_id vì trong group có nhiều người: nếu chỉ khoá theo
     chat_id, preview của người này ghi đè người kia và bấm nút sẽ báo hết hạn.
     """
     sent = await message.reply_text(
-        _preview_text(items, note), reply_markup=_keyboard(), parse_mode=ParseMode.HTML
+        _preview_text(items, note, date_notes),
+        reply_markup=_keyboard(),
+        parse_mode=ParseMode.HTML,
     )
     msg_id = getattr(sent, "message_id", None)
     PENDING.put(chat_id, Pending(items=items, note=note), message_id=msg_id)
@@ -432,10 +445,18 @@ async def _handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
         )
         return
 
+    # Kiểm tra NGƯỢC ngày: ngày user nói có thật trong sổ chưa?
+    # Nếu chưa -> phải ghi ngày vào cột A, không để trống (trống = sai ngày).
+    date_notes: list[str] = []
+    try:
+        date_notes = ensure_date_present(items, STORE, text)
+    except Exception as exc:  # pragma: no cover - không để lỗi này chặn ghi sổ
+        log.warning("Không kiểm tra được ngày: %s", exc)
+
     HB.bump("entries_parsed", len(items))
     HB.event("parsed", f"{len(items)} bút toán từ: {text[:50]}")
     HB.ping(last_message=text[:100])
-    await _send_preview(message, items, note, chat_id)
+    await _send_preview(message, items, note, chat_id, date_notes=date_notes)
 
 
 async def on_group_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

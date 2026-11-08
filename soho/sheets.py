@@ -199,6 +199,122 @@ class _BaseStore:
     def data_region(self) -> tuple[int, int]:
         return self._data_start, self._data_end
 
+    # ── ngày tháng: mỗi ngày chỉ ghi 1 lần ──────────────────────────
+
+    @staticmethod
+    def _date_key(value: Any) -> str:
+        """Chuẩn hoá ngày về 'YYYY-MM-DD' để so sánh.
+
+        Sổ có thể chứa serial (46334), text ('8/11'), hoặc date object.
+        Trả '' nếu không phải ngày.
+        """
+        from datetime import date as _d
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+
+        if value in (None, ""):
+            return ""
+        if isinstance(value, _dt):
+            return value.date().isoformat()
+        if isinstance(value, _d):
+            return value.isoformat()
+        if isinstance(value, (int, float)):
+            if 1 <= float(value) <= 100000:
+                return (_d(1899, 12, 30) + _td(days=int(value))).isoformat()
+            return ""
+        text = str(value).strip()
+        if not text:
+            return ""
+        if text.replace(".", "", 1).isdigit() and len(text.split(".")[0]) == 5:
+            try:
+                return (_d(1899, 12, 30) + _td(days=int(float(text)))).isoformat()
+            except (ValueError, OverflowError):
+                return ""
+        for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                return _dt.strptime(text, fmt).date().isoformat()
+            except ValueError:
+                continue
+        import re as _re
+
+        m = _re.fullmatch(r"(\d{1,2})/(\d{1,2})", text)
+        if m:
+            day, month = int(m.group(1)), int(m.group(2))
+            try:
+                return _d(_d.today().year, month, day).isoformat()
+            except ValueError:
+                return ""
+        return ""
+
+    def _last_row_date_key(self) -> str:
+        """Ngày HIỆU LỰC của dòng dữ liệu cuối cùng.
+
+        Phải trace NGƯỢC LÊN: trong sổ, ngày chỉ ghi ở dòng ĐẦU của mỗi ngày,
+        các dòng sau trong cùng ngày để trống. Nên dòng cuối thường KHÔNG có
+        ngày — đọc thẳng dòng cuối sẽ luôn ra rỗng (bug đã gặp).
+        """
+        if self._data_end < self._data_start:
+            return ""
+        date_col = self.columns.get("ngay", 0)
+        try:
+            letter = self._col_letter(date_col)
+        except AttributeError:
+            letter = "A"
+        try:
+            got = self.ws.get_values(
+                range_name=f"{letter}{self._data_start}:{letter}{self._data_end}",
+                value_render_option="UNFORMATTED_VALUE",
+            )
+        except Exception:  # pragma: no cover
+            return ""
+
+        for cell in reversed(got or []):
+            if cell and cell[0] not in (None, ""):
+                key = self._date_key(cell[0])
+                if key:
+                    return key
+        return ""
+
+    def _apply_date_once(self, rows: list[list[Any]]) -> list[list[Any]]:
+        """Mỗi NGÀY chỉ ghi vào cột Ngày tháng MỘT LẦN.
+
+        Sổ của user dùng cột A làm nhãn ngày: dòng đầu của ngày có ngày,
+        các dòng sau trong cùng ngày để trống. Nếu bot ghi ngày ở mọi dòng,
+        cột A bị lặp (đã xảy ra thật: R69/R75/R77 đều là 8/11).
+
+        Quy tắc:
+          - Nếu ngày của dòng trùng ngày của dòng NGAY TRÊN nó -> để trống
+            (ngày đó đã được ghi rồi).
+          - Nếu khác -> GIỮ nguyên (đây là lần đầu ghi ngày đó).
+        """
+        date_col = self.columns.get("ngay", 0)
+        if not rows:
+            return rows
+
+        out: list[list[Any]] = [list(r) for r in rows]
+        if date_col >= len(out[0]) and date_col != 0:
+            return out
+
+        last_key = self._last_row_date_key()
+
+        for row in out:
+            if date_col >= len(row):
+                continue
+            raw = row[date_col]
+            key = self._date_key(raw)
+            if not key:
+                # Dòng không có ngày: giữ nguyên (thuộc ngày phía trên)
+                continue
+            if key == last_key:
+                row[date_col] = ""  # ngày này đã có ở dòng trên -> bỏ
+            else:
+                last_key = key  # lần đầu ghi ngày này -> giữ
+        return out
+
+    def _prepare_rows(self, rows: list[list[Any]]) -> list[list[Any]]:
+        """Áp quy tắc ngày trước khi ghi. Dùng chung cho mọi backend."""
+        return self._apply_date_once(rows)
+
     def read_range(self, start_row: int, end_row: int) -> list[list[str]]:
         """Đọc NGUYÊN các dòng trong vùng dữ liệu (1-based, tính cả 2 đầu).
 
@@ -292,6 +408,8 @@ class XlsxStore(_BaseStore):
     def append(self, rows: list[list[Any]]) -> list[int]:
         self._refresh_bounds()
         start = self._data_end + 1
+        # Mỗi ngày chỉ ghi cột Ngày tháng MỘT lần (dòng đầu của ngày đó).
+        rows = self._prepare_rows(rows)
         written: list[int] = []
         if self._data_end > self.header_row:
             # chèn để đẩy khối tổng xuống, giống Google Sheets
@@ -416,6 +534,9 @@ class GoogleSheetStore(_BaseStore):
     def append(self, rows: list[list[Any]]) -> list[int]:
         self._refresh_bounds()
         start = self._data_end + 1
+
+        # Mỗi ngày chỉ ghi cột Ngày tháng MỘT lần (dòng đầu của ngày đó).
+        rows = self._prepare_rows(rows)
         n = len(rows)
 
         # Hết dòng thì tự mở rộng, không để user gặp lỗi "exceeds grid limits".

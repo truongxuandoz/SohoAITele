@@ -384,3 +384,67 @@ loi RO RANG khi cham `MAX_SHEET_ROWS` thay vi de Google tra
 - "thu tong 3 phong" la but toan, khong phai dong tong
 - tu mo rong khi gan het dong
 - bao loi ro rang khi cham gioi han cung
+---
+
+## 0d. Cot Ngay thang bi LAP (moi ngay chi duoc ghi 1 lan)
+
+### Trieu chung
+Anh chup so that cho thay cot A lap lai `8/11/2026` nhieu lan:
+
+```
+R69: 46334  (8/11)  p301 tt
+R75: 46334  (8/11)  P304 tt checkout tre
+R77: 46334  (8/11)  P203, 302, tt du
+```
+
+Kiem tra tren so that: `2026-11-08` xuat hien **3 lan**.
+
+### Nguyen nhan
+`Item.as_row()` luon tra ve `ngay_thang`, nen MOI dong but toan deu mang ngay.
+Nhung so cua user dung cot A lam NHAN NGAY: dong dau cua ngay co ngay,
+cac dong sau trong cung ngay de TRONG.
+
+### Yeu cau cua user (2 dieu)
+1. "ung voi moi 1 ngay tren cot ngay thang thi chi co 1 lan nhap ngay thoi"
+2. "kiem tra nguoc lai xem co note ngay cho cot vao ngay day chua,
+    neu chua thi them vao"
+
+### Sua
+**a) `_apply_date_once()`** - chay truoc khi ghi (ca 2 backend):
+
+```python
+last_key = self._last_row_date_key()   # ngay hieu luc cua dong cuoi
+for row in rows:
+    key = self._date_key(row[date_col])
+    if not key:
+        continue                        # khong ngay -> giu nguyen
+    if key == last_key:
+        row[date_col] = ""              # ngay da co o dong tren -> bo
+    else:
+        last_key = key                  # lan dau cua ngay -> giu
+```
+
+**b) `_last_row_date_key()` phai TRACE NGUOC**
+Dong cuoi cung thuong KHONG co ngay (vi ngay ghi o dong dau cua ngay do).
+Doc thang dong cuoi luon ra rong -> phai doc lai tu `_data_start` den
+`_data_end` va lay ngay cuoi cung tim duoc. (Bug nay lam test fail 1 lan.)
+
+**c) Kiem tra nguoc: `ensure_date_present()`**
+Truoc khi ghi, kiem tra ngay user noi co trong so chua:
+- Neu CHUA -> ghi ngay vao cot A (khong duoc de trong, vi trong = thuoc
+  ngay cua dong phia tren -> SAI ngay)
+- Neu DA co -> de trong, va hien ghi chu trong preview:
+  "Ngay 08/11/2026 da co trong so (dong 69) - cot Ngay de trong."
+
+**d) `extract_date_from_text()`** - AI khong dien ngay nhung user co noi
+-> tu trich: `9/11`, `08/11/2026`, `hom qua`, `2 ngay truoc`.
+
+### Test
+`tests/test_dates.py` (26 test):
+- lo 3 dong cung ngay -> chi dong dau mang ngay
+- ngay da co trong so -> khong ghi lap
+- ngay moi -> duoc ghi
+- lo tron 2 ngay -> moi ngay 1 lan
+- `append()` thuc su ghi trong cho dong cung ngay
+- kiem tra nguoc: tim thay / khong tim thay ngay
+- ngay tuong doi: hom nay/hom qua/hom kia/N ngay truoc/mai
