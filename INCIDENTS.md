@@ -448,3 +448,59 @@ Truoc khi ghi, kiem tra ngay user noi co trong so chua:
 - `append()` thuc su ghi trong cho dong cung ngay
 - kiem tra nguoc: tim thay / khong tim thay ngay
 - ngay tuong doi: hom nay/hom qua/hom kia/N ngay truoc/mai
+---
+
+## 0e. Anh hoa don ghi LAP ngay + nam sai (2024 thay vi 2026)
+
+### Trieu chung
+User gui anh hoa don SHB kem caption `/ghi P304 tt checkout tre, 2 nc suoi, 70k van`.
+Bot ghi vao R78 voi ngay `08/11/2024` — trong khi R69 da co `8/11` (2026).
+Cot Ngay bi lap lan thu 4.
+
+### Hai nguyen nhan
+
+**a) `on_photo` KHONG kiem tra ngay**
+Nhanh nhap tay (`_handle_text`) goi `ensure_date_present()`, nhung nhanh anh
+(`on_photo`) thi khong. Nen anh ghi thang vao so ma khong dedup ngay.
+
+**b) Model vision doan SAI NAM**
+Hoa don hien thi thang 11 nam 2026, nhung model dien `08/11/2024` (mau nam cu).
+`_date_key('08/11/2024')` -> `2024-11-08` != `2026-11-08` -> dedup KHONG khop
+-> ghi lap.
+
+### Sua
+
+**a) `on_photo` goi `ensure_date_present()`** giong het nhanh nhap tay:
+
+```python
+date_notes = ensure_date_present(items, STORE, caption)
+await _send_preview(message, items, note, chat_id, date_notes=date_notes)
+```
+
+**b) So sanh theo THANG-NGAY, khong theo nam**
+
+```python
+@staticmethod
+def _day_key(key):        # '2024-11-08' -> '11-08'
+    return key[5:10] if len(key) >= 10 else ''
+```
+
+Ly do: moi TAB cua so la MOT THANG. `08/11` trong tab T11 luon la cung mot
+ngay du AI ghi nam 2024 hay 2026. So sanh thang-ngay ben hon va mien nhiem
+voi loi model doan sai nam.
+
+**c) `_normalize_year()`** - sua nam lech qua 1 nam ve nam hien tai, de
+gia tri GHI VAO O cung dung (khong chi dedup dung):
+
+```
+08/11/2024 -> 2026-11-08   (ghi vao o)
+09/11/2024 -> 2026-11-09
+```
+
+### Test
+- `tests/test_dates.py::TestYearBugFromPhoto` (6 test): normalize nam,
+  day_key bo qua nam, anh 2024 khong lap, ngay moi duoc sua nam,
+  `date_exists_in_sheet` khop qua cac nam
+- `tests/test_photo_group.py::TestPhotoDateRules` (3 test): on_photo goi
+  ensure_date_present, ghi chu ngay hien trong preview, loi kiem tra ngay
+  khong chan ghi so

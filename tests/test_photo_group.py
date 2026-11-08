@@ -168,8 +168,70 @@ class TestPhotoInGroup:
         assert msg.sent
 
 
+class TestPhotoDateRules:
+    """Lỗi thật: ảnh ghi qua on_photo KHÔNG kiểm tra ngày.
+
+    Hậu quả: ảnh hoá đơn 8/11 được ghi lại ngày 8/11 vào R78, trong khi
+    R69 đã có 8/11 -> cột Ngày bị lặp. Đã sửa: on_photo cũng gọi
+    ensure_date_present() như nhập tay.
+    """
+
+    def test_photo_calls_ensure_date_present(self, monkeypatch):
+        """on_photo phải kiểm tra ngày trước khi hiện preview."""
+        called = {}
+
+        def fake_ensure(items, store, text=""):
+            called["items"] = items
+            called["text"] = text
+            return ["note ngày"]
+
+        monkeypatch.setattr(bot, "ensure_date_present", fake_ensure)
+        monkeypatch.setattr(
+            bot,
+            "parse_image",
+            lambda raw, mime="image/jpeg", caption="": (
+                [Item(noi_dung="P304 tt", chi=70000)],
+                "đọc từ ảnh",
+            ),
+        )
+
+        msg = Msg(caption="/ghi P304 tt 70k vân", photos=[Photo()])
+        asyncio.run(bot.on_photo(U(msg), Ctx()))
+
+        assert "items" in called, "phải gọi ensure_date_present cho ảnh"
+        assert called["text"] == "/ghi P304 tt 70k vân", "caption phải được truyền"
+
+    def test_photo_preview_shows_date_note(self, monkeypatch):
+        """Ghi chú ngày phải hiện trong preview."""
+        monkeypatch.setattr(
+            bot, "ensure_date_present", lambda items, store, text="": ["Ngày X đã có trong sổ"]
+        )
+        monkeypatch.setattr(
+            bot,
+            "parse_image",
+            lambda raw, mime="image/jpeg", caption="": ([Item(noi_dung="x", chi=1000)], ""),
+        )
+        msg = Msg(photos=[Photo()])
+        asyncio.run(bot.on_photo(U(msg), Ctx()))
+        assert any("đã có trong sổ" in t for t in msg.sent)
+
+    def test_photo_still_works_if_date_check_fails(self, monkeypatch):
+        """Lỗi khi kiểm tra ngày không được chặn việc ghi sổ."""
+        def boom(*a, **k):
+            raise RuntimeError("không đọc được sổ")
+
+        monkeypatch.setattr(bot, "ensure_date_present", boom)
+        monkeypatch.setattr(
+            bot,
+            "parse_image",
+            lambda raw, mime="image/jpeg", caption="": ([Item(noi_dung="x", chi=1000)], ""),
+        )
+        msg = Msg(photos=[Photo()])
+        asyncio.run(bot.on_photo(U(msg), Ctx()))
+        assert msg.sent, "vẫn phải hiện preview dù kiểm tra ngày lỗi"
+
+
 class TestMimeDetection:
-    """Ảnh phải gửi đúng mime, nếu không model từ chối."""
 
     def test_png_detected(self):
         assert bot._guess_mime(b"\x89PNG\r\n\x1a\n" + b"x" * 50) == "image/png"

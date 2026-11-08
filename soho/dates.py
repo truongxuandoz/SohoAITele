@@ -52,9 +52,11 @@ def parse_relative_date(text: str, today: date | None = None) -> date | None:
 def date_exists_in_sheet(store, target: date) -> tuple[bool, int | None]:
     """Ngày `target` đã có trong cột Ngày tháng của sổ chưa?
 
+    So sánh theo THÁNG-NGÀY, không theo năm: mỗi tab của sổ là một tháng,
+    nên '08/11' trong tab T11 luôn là cùng một ngày dù ghi năm 2024 hay 2026.
+    Nhờ vậy tránh được lỗi model vision điền sai năm (đã xảy ra thật).
+
     Trả (có_không, dòng_chứa_ngày_đó).
-    Dùng để quyết định: nếu CHƯA có thì phải ghi ngày vào cột A, không được
-    để trống (trống = thuộc ngày của dòng phía trên -> bút toán bị sai ngày).
     """
     from .sheets import GoogleSheetStore
 
@@ -66,12 +68,12 @@ def date_exists_in_sheet(store, target: date) -> tuple[bool, int | None]:
     date_col = store.columns.get("ngay", 0)
     rows = store.read_range(start, end)
 
-    target_key = target.isoformat()
+    target_day = f"{target.month:02d}-{target.day:02d}"
     for offset, row in enumerate(rows):
         if date_col >= len(row):
             continue
         key = GoogleSheetStore._date_key(row[date_col])
-        if key == target_key:
+        if key and GoogleSheetStore._day_key(key) == target_day:
             return True, start + offset
     return False, None
 

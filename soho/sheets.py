@@ -246,8 +246,48 @@ class _BaseStore:
                 return ""
         return ""
 
+    @staticmethod
+    def _normalize_year(key: str, today_year: int | None = None) -> str:
+        """Sửa năm bị AI đoán sai (vd 2024 thay vì 2026).
+
+        Vì sao: model vision đọc ảnh hoá đơn hay điền năm theo mẫu cũ, tạo ra
+        '08/11/2024' trong khi sổ đang ở 2026. Nếu giữ nguyên, dedup ngày sẽ
+        KHÔNG khớp -> cột Ngày bị ghi lặp (đã xảy ra thật ở R78).
+
+        Quy tắc: nếu năm lệch quá 1 năm so với hôm nay thì kéo về năm nay.
+        Sổ thu chi theo tháng, không ai ghi bút toán cho năm khác.
+        """
+        if not key:
+            return key
+        from datetime import date as _d
+
+        try:
+            d = _d.fromisoformat(key)
+        except ValueError:
+            return key
+        year = today_year or _d.today().year
+        if abs(d.year - year) > 1:
+            try:
+                return d.replace(year=year).isoformat()
+            except ValueError:
+                # 29/02 của năm nhuận -> dùng 28/02
+                return d.replace(year=year, day=28).isoformat()
+        return key
+
+    @staticmethod
+    def _day_key(key: str) -> str:
+        """Khoá so sánh 'MM-DD' từ 'YYYY-MM-DD'.
+
+        Vì sao không so sánh cả năm: mỗi TAB của sổ là MỘT THÁNG, nên
+        08/11 trong tab T11 luôn là cùng một ngày, dù AI ghi năm 2024 hay
+        2026. So sánh tháng-ngày bền hơn và tránh lỗi model đoán sai năm.
+        """
+        if not key or len(key) < 10:
+            return ""
+        return key[5:10]
+
     def _last_row_date_key(self) -> str:
-        """Ngày HIỆU LỰC của dòng dữ liệu cuối cùng.
+        """Ngày HIỆU LỰC của dòng dữ liệu cuối cùng, đã chuẩn hoá năm.
 
         Phải trace NGƯỢC LÊN: trong sổ, ngày chỉ ghi ở dòng ĐẦU của mỗi ngày,
         các dòng sau trong cùng ngày để trống. Nên dòng cuối thường KHÔNG có
@@ -272,7 +312,7 @@ class _BaseStore:
             if cell and cell[0] not in (None, ""):
                 key = self._date_key(cell[0])
                 if key:
-                    return key
+                    return self._normalize_year(key)
         return ""
 
     def _apply_date_once(self, rows: list[list[Any]]) -> list[list[Any]]:
@@ -280,12 +320,12 @@ class _BaseStore:
 
         Sổ của user dùng cột A làm nhãn ngày: dòng đầu của ngày có ngày,
         các dòng sau trong cùng ngày để trống. Nếu bot ghi ngày ở mọi dòng,
-        cột A bị lặp (đã xảy ra thật: R69/R75/R77 đều là 8/11).
+        cột A bị lặp (đã xảy ra thật: R69/R75/R77/R78 đều là 8/11).
 
         Quy tắc:
-          - Nếu ngày của dòng trùng ngày của dòng NGAY TRÊN nó -> để trống
-            (ngày đó đã được ghi rồi).
-          - Nếu khác -> GIỮ nguyên (đây là lần đầu ghi ngày đó).
+          - Sửa năm model đoán sai (2024 -> năm hiện tại).
+          - Nếu THÁNG-NGÀY của dòng trùng dòng phía trên -> để trống.
+          - Nếu khác -> GIỮ nguyên (lần đầu ghi ngày đó).
         """
         date_col = self.columns.get("ngay", 0)
         if not rows:
@@ -295,7 +335,7 @@ class _BaseStore:
         if date_col >= len(out[0]) and date_col != 0:
             return out
 
-        last_key = self._last_row_date_key()
+        last_day = self._day_key(self._last_row_date_key())
 
         for row in out:
             if date_col >= len(row):
@@ -305,10 +345,16 @@ class _BaseStore:
             if not key:
                 # Dòng không có ngày: giữ nguyên (thuộc ngày phía trên)
                 continue
-            if key == last_key:
+
+            fixed = self._normalize_year(key)
+            if fixed != key:
+                row[date_col] = fixed
+            day = self._day_key(fixed)
+
+            if day == last_day:
                 row[date_col] = ""  # ngày này đã có ở dòng trên -> bỏ
             else:
-                last_key = key  # lần đầu ghi ngày này -> giữ
+                last_day = day  # lần đầu ghi ngày này -> giữ
         return out
 
     def _prepare_rows(self, rows: list[list[Any]]) -> list[list[Any]]:

@@ -613,7 +613,15 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     note = note or "đọc từ ảnh"
-    await _send_preview(message, items, note, chat_id)
+    # Cùng quy tắc ngày như nhập tay: mỗi ngày chỉ ghi cột Ngày MỘT lần.
+    # Thiếu bước này thì ảnh ghi lặp ngày (đã xảy ra thật ở R78).
+    date_notes: list[str] = []
+    try:
+        date_notes = ensure_date_present(items, STORE, caption)
+    except Exception as exc:  # pragma: no cover
+        log.warning("Không kiểm tra được ngày (ảnh): %s", exc)
+
+    await _send_preview(message, items, note, chat_id, date_notes=date_notes)
 
 
 async def _safe_edit(query, text: str, **kwargs) -> None:

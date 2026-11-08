@@ -237,6 +237,50 @@ class TestReverseDateCheck:
         assert items[0].ngay_thang == ""
 
 
+class TestYearBugFromPhoto:
+    """Lỗi thật: model vision đọc hoá đơn điền năm 2024 vào sổ đang ở 2026.
+
+    Hậu quả: `_date_key` trả '2024-11-08' != '2026-11-08' -> dedup KHÔNG khớp
+    -> cột Ngày bị ghi lặp (đã xảy ra ở R78).
+    """
+
+    def test_normalize_year_fixes_old_year(self):
+        assert GoogleSheetStore._normalize_year("2024-11-08") == "2026-11-08"
+
+    def test_normalize_year_keeps_current(self):
+        assert GoogleSheetStore._normalize_year("2026-11-08") == "2026-11-08"
+
+    def test_normalize_year_keeps_adjacent(self):
+        """Lệch 1 năm vẫn giữ (có thể là bút toán 31/12 sang 1/1)."""
+        assert GoogleSheetStore._normalize_year("2025-11-08") == "2025-11-08"
+
+    def test_day_key_ignores_year(self):
+        assert GoogleSheetStore._day_key("2024-11-08") == "11-08"
+        assert GoogleSheetStore._day_key("2026-11-08") == "11-08"
+
+    def test_photo_date_2024_does_not_duplicate(self):
+        """8/11/2024 trùng 8/11/2026 -> phải bỏ trống, không ghi lặp."""
+        store = make_store(grid_with_8nov())
+        items = [Item(noi_dung="P304 tt", chi=70000, ngay_thang="08/11/2024")]
+        ensure_date_present(items, store, "")
+        out = store._prepare_rows([items[0].as_row()])
+        assert out[0][0] == "", "cùng tháng-ngày -> không được ghi lặp"
+
+    def test_photo_new_date_gets_current_year(self):
+        """9/11/2024 (ngày mới) -> ghi với năm hiện tại."""
+        store = make_store(grid_with_8nov())
+        rows = [["09/11/2024", "x", 1000, "", "tm"]]
+        out = store._prepare_rows(rows)
+        assert out[0][0] == "2026-11-09", f"phải sửa năm, được {out[0][0]!r}"
+
+    def test_exists_matches_across_years(self):
+        """date_exists_in_sheet so theo tháng-ngày, không theo năm."""
+        store = make_store(grid_with_8nov())
+        exists, row = date_exists_in_sheet(store, date(2024, 11, 8))
+        assert exists is True, "8/11 tồn tại bất kể năm"
+        assert row == 5
+
+
 class TestRelativeDates:
     @pytest.mark.parametrize(
         "text,delta",
