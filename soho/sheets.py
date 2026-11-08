@@ -99,6 +99,19 @@ class _BaseStore:
                     break
         if len(found) < 3:
             found = {"ngay": 0, "noi_dung": 1, "thu": 2, "chi": 3, "ghi_chu": 4}
+
+        # Header cột nhãn có thể để TRỐNG hoặc chỉ là dấu cách (sổ T11 như vậy).
+        # Nếu tìm được 4 cột chuẩn mà thiếu ghi_chu, và cột kế tiếp tồn tại
+        # thì đó chính là cột nhãn — theo đúng thứ tự sổ.
+        if "ghi_chu" not in found:
+            used = set(found.values())
+            for idx in range(len(header_row)):
+                if idx not in used:
+                    found["ghi_chu"] = idx
+                    break
+            else:
+                found["ghi_chu"] = max(used) + 1 if used else 4
+
         return found
 
     def _find_data_bounds(self, rows: list[list[Any]]) -> tuple[int, int]:

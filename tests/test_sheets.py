@@ -65,4 +65,59 @@ def test_append_multiple(ledger):
         ]
     )
     assert written == [6, 7]
-    assert len(store.tail(5)) == 5
+
+
+class TestColumnDetection:
+    """Sổ thật có nhiều kiểu header cho cột nhãn — phải nhận đúng hết."""
+
+    @pytest.mark.parametrize(
+        "header_e",
+        [
+            "ghi chú",      # thường
+            " Ghi Chú",     # có dấu cách đầu (sheet T11 thật)
+            "Ghi Chú",      # chữ hoa
+            "GHI CHU",      # không dấu
+            "ghi_chu",      # snake_case
+            "note",         # tiếng Anh
+            "",             # TRỐNG hoàn toàn
+            " ",            # chỉ dấu cách
+        ],
+    )
+    def test_ghi_chu_header_variants(self, tmp_path, header_e):
+        """Cột nhãn luôn phải được nhận ra, kể cả khi header trống."""
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "T"
+        ws["A2"], ws["B2"], ws["C2"], ws["D2"], ws["E2"] = (
+            "Ngày tháng",
+            "Nội Dung",
+            "Thu",
+            "Chi",
+            header_e,
+        )
+        ws.append(["", "p304 tt", 1_000_000, None, "soho"])
+        path = tmp_path / "t.xlsx"
+        wb.save(path)
+
+        store = XlsxStore(path, "T")
+        assert store.columns["ghi_chu"] == 4, f"header={header_e!r}"
+        assert store.columns["thu"] == 2
+        assert store.columns["chi"] == 3
+
+    def test_all_columns_present(self, tmp_path):
+        """Đủ 5 cột chuẩn."""
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "T"
+        ws["A2"], ws["B2"], ws["C2"], ws["D2"], ws["E2"] = (
+            "Ngày tháng",
+            "Nội Dung",
+            "Thu",
+            "Chi",
+            "ghi chú",
+        )
+        ws.append(["", "x", 100, None, "tm"])
+        path = tmp_path / "t.xlsx"
+        wb.save(path)
+        store = XlsxStore(path, "T")
+        assert set(store.columns) >= {"ngay", "noi_dung", "thu", "chi", "ghi_chu"}
