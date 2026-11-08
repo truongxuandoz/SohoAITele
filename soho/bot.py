@@ -346,7 +346,10 @@ async def on_group_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not message:
         return
 
-    # Chỉ xử lý khi bot thực sự được gọi tên
+    # Chỉ xử lý khi bot thực sự được gọi tên.
+    # NHƯNG: ảnh gửi vào group gần như luôn là ảnh cho bot (hoá đơn, sổ tay),
+    # và ảnh không thể chứa mention dạng text -> nếu bắt mention thì ảnh
+    # không bao giờ được xử lý. Nên với PHOTO, cho qua luôn.
     me_username = (context.bot.username or "").lower()
     me_id = context.bot.id
 
@@ -367,6 +370,12 @@ async def on_group_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         and message.reply_to_message.from_user.id == me_id
     )
 
+    if message.photo:
+        # Ảnh: không cần mention. Chỉ cần bot được phép ở chat này
+        # (kiểm tra trong on_photo qua _guard).
+        await on_photo(update, context)
+        return
+
     if not (mentioned or replied_to_me):
         return  # không gọi bot -> im lặng, không spam group
 
@@ -374,10 +383,6 @@ async def on_group_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if me_username:
         text = text.replace(f"@{context.bot.username}", " ")
     text = " ".join(text.split()).strip()
-
-    if message.photo:
-        await on_photo(update, context)
-        return
 
     if not text:
         await message.reply_text("Dạ, bạn cần ghi bút toán gì ạ? Ví dụ: p304 tt 1.480.000 chi soho")
@@ -402,6 +407,25 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _handle_text(update, context, text)
 
 
+def _guess_mime(raw: bytes, reported: str | None = None) -> str:
+    """Xác định mime thật của ảnh từ magic bytes.
+
+    Không tin hoàn toàn mime Telegram báo: có trường hợp trả về
+    application/octet-stream, khiến model từ chối ảnh.
+    """
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if raw[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if raw[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "image/webp"
+    if reported and reported.startswith("image/"):
+        return reported
+    return "image/jpeg"
+
+
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ảnh (sổ tay, hoá đơn) -> gửi base64 cho model vision."""
     if not await _guard(update):
@@ -410,20 +434,42 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     caption = message.caption or ""
 
+    if not message.photo:
+        await message.reply_text("Mình chỉ đọc được ảnh chụp (photo), không đọc được file.")
+        return
+
+    # photo[-1] là kích thước LỚN NHẤT Telegram lưu. Ảnh nén của Telegram
+    # luôn là JPEG, nên mime cố định "image/jpeg" ở đây là đúng.
     photo = message.photo[-1]
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    HB.bump("messages_received")
+    HB.event("photo", f"{getattr(message, 'caption', None) or 'ảnh'} ({photo.width}x{photo.height})")
+
     try:
         file = await context.bot.get_file(photo.file_id)
         raw = bytes(await file.download_as_bytearray())
     except Exception as exc:
         log.exception("Không tải được ảnh")
+        HB.bump("errors")
+        HB.event("error", f"tải ảnh: {exc}")
         await message.reply_text(f"⚠️ Không tải được ảnh: {exc}")
         return
 
+    if not raw:
+        await message.reply_text("⚠️ Ảnh rỗng, gửi lại giúp mình.")
+        return
+
+    log.info("Đọc ảnh %s bytes (mime %s)", len(raw), getattr(file, "mime_type", "?"))
+    HB.bump("ai_calls")
     try:
-        items, note = parse_image(raw, mime="image/jpeg", caption=caption)
+        # Dùng đúng mime Telegram báo; nếu không có thì đoán theo magic bytes.
+        mime = _guess_mime(raw, getattr(file, "mime_type", None))
+        items, note = parse_image(raw, mime=mime, caption=caption)
     except Exception as exc:
         log.exception("Lỗi AI vision")
+        HB.bump("errors")
+        HB.event("error", f"AI vision: {exc}")
+        HB.ping(last_error=f"vision: {exc}")
         await message.reply_text(f"⚠️ Không đọc được ảnh: {exc}")
         return
 
