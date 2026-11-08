@@ -59,6 +59,17 @@ class FakeWorksheet:
             self.grid.insert(idx, list(new_row))
         return {}
 
+    # gspread.Worksheet có các thuộc tính/method này; store dùng để tự mở rộng
+    # tab khi sắp hết dòng (_ensure_rows). Fake phải có để test không nổ.
+    @property
+    def row_count(self):
+        return max(len(self.grid), 1000)
+
+    def resize(self, rows=None, cols=None):
+        while len(self.grid) < (rows or 0):
+            self.grid.append(["", "", "", "", ""])
+        return {}
+
     def update(self, range_name=None, values=None, value_input_option=None, **kwargs):
         self.updates.append(range_name)
         return {}

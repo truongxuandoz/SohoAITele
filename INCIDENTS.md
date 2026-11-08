@@ -309,3 +309,78 @@ python check_setup.py      # kiểm tra toàn bộ cấu hình
 | Bot ghi vào R680 | Append ngây thơ vào dòng cuối sheet | Đã sửa: dùng `insert_rows` |
 | `JSONDecodeError` khi gọi AI | Gateway trả SSE | Đã sửa: `_read_sse()` |
 | `no current event loop` | Python 3.14 + PTB cũ | Pin PTB 22.8 |
+
+---
+
+## 0c. Nguy co GHI DE khoi Tong khi cac dong trong bi lap day
+
+### Cau hoi that
+"Gia su dien kin tu dong 79 thi dong 80 dang co data (Tong) no se xu ly sao?"
+
+### Trieu chung neu khong sua
+`_find_data_bounds` cu chi dung **GAP_ROWS = 3** dong trong lam moc ket thuc.
+Khi cac dong trong bi lap dan (nguoi dung xoa bot, dan de, hoac so that co
+it dong trong), vung du lieu "nuot" luon khoi Tong:
+
+```
+gap = 5 -> (3, 74)  OK
+gap = 4 -> (3, 74)  OK
+gap = 3 -> (3, 74)  OK
+gap = 2 -> (3, 81)  NGUY HIEM  <- lan 5 dong cua khoi Tong
+gap = 1 -> (3, 80)  NGUY HIEM
+gap = 0 -> (3, 79)  NGUY HIEM
+```
+
+Hau qua: bot chen dong moi VAO GIUA khoi Tong/doi soat, hoac ghi de len
+"mang sang"/"Kim"/"tm"/"Tong tien" -> mat du lieu doi soat.
+
+### Nguyen nhan sau xa
+Chi dua vao so dong trong la gia dinh ve **dinh dang**, khong phai ve
+**y nghia**. Nguoi dung hoan toan co the xoa bot dong trong ma khong biet
+minh vua pha vo logic cua bot.
+
+### Sua
+Them MOC CUNG: tim dong bat dau khoi Tong (`_find_total_row`) va DUNG NGAY
+khi cham dong do, khong phu thuoc gap:
+
+```python
+for idx in range(start, len(rows) + 1):
+    if total_row is not None and idx >= total_row:
+        break        # <- moc cung
+    ...
+```
+
+Ket qua sau khi sua — an toan o MOI gap, ke ca gap = 0:
+
+```
+gap = 5 -> (3, 74) OK
+gap = 4 -> (3, 74) OK
+gap = 3 -> (3, 74) OK
+gap = 2 -> (3, 74) OK
+gap = 1 -> (3, 74) OK
+gap = 0 -> (3, 74) OK
+```
+
+### Bay Unicode gap phai xu ly
+So ghi `"Tồng thu chi"` (dau **o**) chu khong phai `"Tổng"` (dau **ô**).
+`"tồng".startswith("tổng")` tra **False** -> phai bo dau bang `_norm()`
+truoc khi so sanh.
+
+### Bay thu hai: "mang sang"
+`"mang sang"` o dong DAU vung du lieu la **but toan that** (so du dau ky),
+khong phai khoi tong. Chi coi la moc tong khi xuat hien o dong > start+20.
+
+### Them: tu mo rong khi tab het dong
+`_ensure_rows()` tu goi `resize()` khi `data_end + n > row_count`, va bao
+loi RO RANG khi cham `MAX_SHEET_ROWS` thay vi de Google tra
+"exceeds grid limits" kho hieu.
+
+### Regression test
+`tests/test_row_limits.py` (16 test):
+- gap 5/4/3/2/1/0 deu dung o R(2+N), khong lan vao khoi Tong
+- chen dong o gap 2/1/0 van nam TRUOC khoi Tong
+- tim dong Tong voi chu "Tồng" (Unicode)
+- "mang sang" dau so la du lieu, khong phai moc tong
+- "thu tong 3 phong" la but toan, khong phai dong tong
+- tu mo rong khi gan het dong
+- bao loi ro rang khi cham gioi han cung

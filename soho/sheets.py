@@ -15,11 +15,19 @@ khối đối soát). Thay vào đó phải:
 from __future__ import annotations
 
 import json
+import logging
 import unicodedata
 from pathlib import Path
 from typing import Any, Protocol
 
 from .config import config
+
+log = logging.getLogger(__name__)
+
+# Giới hạn cứng của Google Sheets: 10 triệu ô mỗi tab, thực tế nên dừng sớm.
+MAX_SHEET_ROWS = 50_000
+# Khi phải mở rộng, mở dư bao nhiêu dòng (tránh gọi API mỗi lần ghi)
+GROW_ROWS = 500
 
 HEADER_HINTS = {
     "ngay": ("ngay", "ngày", "date"),
@@ -114,18 +122,69 @@ class _BaseStore:
 
         return found
 
+    def _find_total_row(self, rows: list[list[Any]], start: int) -> int | None:
+        """Tìm dòng bắt đầu khối Tổng/đối soát phía dưới vùng dữ liệu.
+
+        Đây là MỐC CỨNG: dùng để chặn vùng dữ liệu, KHÔNG phụ thuộc số dòng
+        trống. Nếu chỉ dựa vào GAP_ROWS thì khi người dùng xoá bớt dòng trống
+        (hoặc dán đè), vùng dữ liệu sẽ "nuốt" khối Tổng và bot ghi đè lên đó.
+
+        LƯU Ý Unicode: sổ ghi "Tồng thu chi" (dấu ồ) chứ không phải "Tổng".
+        So sánh chuỗi thô sẽ trượt — phải bỏ dấu bằng _norm() trước.
+
+        LƯU Ý thứ tự: "mang sang" ở dòng ĐẦU vùng dữ liệu là bút toán thật
+        (số dư đầu kỳ), KHÔNG phải khối tổng. Chỉ coi "mang sang" là mốc tổng
+        khi nó xuất hiện ở cột Thu/Chi của dòng KHÔNG phải dữ liệu đầu tiên.
+        """
+        # Từ khoá chỉ có ở khối tổng — an toàn ở mọi vị trí
+        hard = ("tong thu chi", "tong tien", "tong chi", "tong thu", "con lai")
+
+        for idx in range(start, len(rows) + 1):
+            row = rows[idx - 1] if idx - 1 < len(rows) else []
+            cells = [_norm(c) for c in row[:4]]
+
+            for text in cells:
+                if not text:
+                    continue
+                if any(text.startswith(m) for m in hard):
+                    return idx
+
+            # "tổng" trần: chỉ tin khi nội dung (cột B) bắt đầu bằng "tong"
+            noi_dung = cells[1] if len(cells) > 1 else ""
+            if noi_dung.startswith("tong"):
+                return idx
+
+            # "mang sang": chỉ là mốc tổng khi NGOÀI vùng dữ liệu đầu.
+            # Dòng đầu tiên của sổ (idx == start) thường chính là "mang sang".
+            if idx > start + 20:
+                for text in cells[1:4]:
+                    if text == "mang sang":
+                        return idx
+
+        return None
+
     def _find_data_bounds(self, rows: list[list[Any]]) -> tuple[int, int]:
         """Trả về (dòng bắt đầu, dòng kết thúc) của VÙNG DỮ LIỆU THẬT.
 
-        Dừng khi gặp GAP_ROWS dòng trống liên tiếp -> phần sau là khối tổng/ghi chú.
-        Nếu không có khoảng trống, dùng dòng cuối cùng có dữ liệu.
+        Dùng HAI mốc, lấy mốc nào chặn sớm hơn (an toàn hơn):
+          1. GAP_ROWS dòng trống liên tiếp  -> hết vùng dữ liệu
+          2. Dòng bắt đầu khối Tổng         -> mốc cứng, không bao giờ vượt
+
+        Vì sao cần cả hai: nếu người dùng xoá bớt dòng trống giữa dữ liệu và
+        khối Tổng (còn < GAP_ROWS dòng), chỉ dựa vào gap thì khối Tổng bị coi
+        là dữ liệu -> bot ghi đè lên Tổng/đối soát. Mốc cứng ngăn việc đó.
         """
         start = self.header_row + 1
-        end = start
+        total_row = self._find_total_row(rows, start)
+
         best_end = start - 1  # vùng rỗng
         gap = 0
 
         for idx in range(start, len(rows) + 1):
+            # Chạm dòng Tổng -> DỪNG NGAY, không xét dòng đó là dữ liệu.
+            if total_row is not None and idx >= total_row:
+                break
+
             row = rows[idx - 1] if idx - 1 < len(rows) else []
             if _is_empty_row(row):
                 gap += 1
@@ -135,8 +194,7 @@ class _BaseStore:
                 gap = 0
                 best_end = idx
 
-        end = best_end
-        return start, end
+        return start, best_end
 
     def data_region(self) -> tuple[int, int]:
         return self._data_start, self._data_end
@@ -334,10 +392,34 @@ class GoogleSheetStore(_BaseStore):
         rows = self.ws.get_values(range_name=f"A{start_row}:E{end_row}")
         return [list(r) + [""] * (5 - len(r)) for r in rows]
 
+    def _ensure_rows(self, needed: int) -> None:
+        """Bảo đảm tab còn đủ dòng trống để chèn `needed` dòng.
+
+        Google Sheets giới hạn số dòng của tab. Nếu đã chạm đáy, insert_rows
+        sẽ lỗi ("exceeds grid limits"). Tự mở rộng thay vì để user gặp lỗi
+        khó hiểu.
+        """
+        try:
+            current = self.ws.row_count
+        except Exception:  # pragma: no cover
+            return
+        if current + needed >= MAX_SHEET_ROWS:
+            raise RuntimeError(
+                f"Tab đã có {current} dòng, chạm giới hạn Google Sheets "
+                f"({MAX_SHEET_ROWS}). Cần tạo tab mới cho tháng tiếp theo."
+            )
+        if self._data_end + needed > current:
+            target = self._data_end + needed + GROW_ROWS
+            log.info("Mở rộng tab: %s -> %s dòng", current, target)
+            self.ws.resize(rows=min(target, MAX_SHEET_ROWS))
+
     def append(self, rows: list[list[Any]]) -> list[int]:
         self._refresh_bounds()
         start = self._data_end + 1
         n = len(rows)
+
+        # Hết dòng thì tự mở rộng, không để user gặp lỗi "exceeds grid limits".
+        self._ensure_rows(n)
 
         # Chèn N dòng ngay sau vùng dữ liệu -> khối Tổng/đối soát bị đẩy xuống,
         # KHÔNG bị ghi đè.
