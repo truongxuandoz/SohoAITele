@@ -341,13 +341,29 @@ Mở http://127.0.0.1:8000 → khung chat có nút **Ghi sổ / Huỷ**.
 
 ---
 
-## 11. Deploy lên cloud
+## 11. Chạy bot & giám sát
+
+### Khuyến nghị: chạy trên máy nhà + dashboard
+
+```
+run_server.bat          →  http://127.0.0.1:8787
+```
+
+Có dashboard xem trạng thái, số liệu, log realtime, và bật/tắt bot.
+Tự khởi động lại khi crash, không để bot mồ côi. Xem **[LOCAL-HOSTING.md](LOCAL-HOSTING.md)**.
+
+### Deploy lên cloud
 
 | Nền tảng | Hợp với | Ghi chú |
 |---|---|---|
-| **Render free** | Bot Telegram | Có `render.yaml` sẵn → xem **[DEPLOY-RENDER.md](DEPLOY-RENDER.md)**. Cần pinger chống ngủ 15 phút. |
+| **Máy nhà** ⭐ | Bot Telegram | Không giới hạn giờ, không ngủ. Có dashboard. Xem **[LOCAL-HOSTING.md](LOCAL-HOSTING.md)** |
+| **Render free** | Bot Telegram | Có `render.yaml` sẵn → xem **[DEPLOY-RENDER.md](DEPLOY-RENDER.md)**. ⚠️ Ngủ sau 15 phút idle → cần pinger cron-job.org, mỗi lần ngủ dậy mất ~60s |
 | **VPS / Railway** | Bot Telegram | Polling 24/7, không cần sửa gì. Chỉ chạy `python -m soho.bot`. |
 | **Vercel** | Bản web (`web/app.py`) | Bot Telegram **không** chạy được: polling cần process sống, filesystem read-only. |
+
+> **Vì sao không nên dùng Render free cho bot:** bot dùng polling, nên Render thấy
+> "không có request vào" → cho ngủ sau 15 phút → bot chết. Pinger đánh thức được
+> nhưng tin nhắn trong lúc ngủ có thể bị lỡ. Chạy máy nhà tránh hẳn vấn đề này.
 
 Điểm đã sửa để chạy được trên cloud:
 - Credentials qua biến `GOOGLE_CREDENTIALS_JSON` (không cần file, vì `.gitignore` chặn `credentials/`)

@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SoHo AI — Monitor</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#131a22; --panel2:#182230; --line:#1f2b38;
+    --txt:#e6edf3; --dim:#8b9bad; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+    --accent:#58a6ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.5 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:14px 20px;
+    border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:10}
+  h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.2px}
+  .pill{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border-radius:999px;
+    font-size:12.5px;font-weight:600;border:1px solid transparent}
+  .pill .dot{width:8px;height:8px;border-radius:50%;background:currentColor;flex:0 0 auto}
+  .running{background:rgba(63,185,80,.12);color:var(--ok);border-color:rgba(63,185,80,.35)}
+  .stopped{background:rgba(139,155,173,.12);color:var(--dim);border-color:rgba(139,155,173,.3)}
+  .crashed,.restarting{background:rgba(248,81,73,.12);color:var(--bad);border-color:rgba(248,81,73,.35)}
+  .starting{background:rgba(210,153,34,.12);color:var(--warn);border-color:rgba(210,153,34,.35)}
+  .live{animation:pulse 1.8s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  main{padding:20px;max-width:1280px;margin:0 auto}
+  .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-bottom:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .card .label{color:var(--dim);font-size:11.5px;text-transform:uppercase;letter-spacing:.7px;margin-bottom:7px}
+  .card .value{font-size:23px;font-weight:650;font-variant-numeric:tabular-nums}
+  .card .sub{color:var(--dim);font-size:12px;margin-top:5px}
+  .btns{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:18px}
+  button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+    padding:9px 17px;border-radius:7px;font-size:13.5px;font-weight:550;cursor:pointer;
+    transition:.14s;font-family:inherit}
+  button:hover:not(:disabled){background:#20303f;border-color:#2d4256}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:rgba(63,185,80,.16);border-color:rgba(63,185,80,.4);color:var(--ok)}
+  button.danger{background:rgba(248,81,73,.14);border-color:rgba(248,81,73,.4);color:var(--bad)}
+  button.warn{background:rgba(210,153,34,.14);border-color:rgba(210,153,34,.4);color:var(--warn)}
+  .panels{display:grid;gap:16px;grid-template-columns:1.35fr 1fr}
+  @media(max-width:900px){.panels{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .panel h2{font-size:12.5px;margin:0;padding:12px 16px;color:var(--dim);
+    text-transform:uppercase;letter-spacing:.7px;border-bottom:1px solid var(--line);
+    display:flex;justify-content:space-between;align-items:center}
+  pre{margin:0;padding:13px 16px;font:12px/1.65 ui-monospace,"Cascadia Code",Consolas,monospace;
+    max-height:430px;overflow:auto;white-space:pre-wrap;word-break:break-word;color:#b9c7d6}
+  .ev{padding:9px 16px;border-bottom:1px solid rgba(31,43,56,.55);display:flex;gap:11px;
+    font-size:12.5px;align-items:baseline}
+  .ev:last-child{border-bottom:none}
+  .ev .t{color:#5d6f82;font-variant-numeric:tabular-nums;flex:0 0 auto;font-size:11.5px}
+  .ev .k{flex:0 0 auto;font-weight:650;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  .k-message,.k-parsed{color:var(--accent)}
+  .k-written,.k-started{color:var(--ok)}
+  .k-error{color:var(--bad)}
+  .k-empty{color:var(--warn)}
+  .ev .x{color:#c3d0dd;word-break:break-word}
+  .empty{padding:26px 16px;text-align:center;color:var(--dim);font-size:13px}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:7px 16px;padding:14px 16px;font-size:12.5px}
+  .kv dt{color:var(--dim)}
+  .kv dd{margin:0;font-family:ui-monospace,Consolas,monospace;font-size:12px;word-break:break-all}
+  .err{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.35);color:#ffb3ae;
+    padding:11px 15px;border-radius:8px;margin-bottom:16px;font-size:13px;display:none}
+  .foot{color:var(--dim);font-size:11.5px;text-align:center;padding:20px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🛡️ SoHo AI — Monitor</h1>
+  <span id="pill" class="pill stopped"><span class="dot"></span><span id="pilltxt">đang tải…</span></span>
+  <span style="margin-left:auto;color:var(--dim);font-size:12px" id="clock"></span>
+</header>
+
+<main>
+  <div class="err" id="err"></div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">Uptime bot</div>
+      <div class="value" id="uptime">—</div>
+      <div class="sub" id="pid">pid —</div>
+    </div>
+    <div class="card">
+      <div class="label">Tin nhắn nhận</div>
+      <div class="value" id="c_msg">—</div>
+      <div class="sub" id="c_ai">AI calls —</div>
+    </div>
+    <div class="card">
+      <div class="label">Bút toán đã ghi</div>
+      <div class="value" id="c_written">—</div>
+      <div class="sub" id="c_parsed">đã bóc —</div>
+    </div>
+    <div class="card">
+      <div class="label">Lỗi</div>
+      <div class="value" id="c_err">—</div>
+      <div class="sub" id="errsub">—</div>
+    </div>
+  </div>
+
+  <div class="btns">
+    <button class="primary" id="b_start" onclick="act('start')">▶ Khởi động</button>
+    <button class="warn"    id="b_restart" onclick="act('restart')">⟳ Khởi động lại</button>
+    <button class="danger"  id="b_stop" onclick="act('stop')">■ Dừng</button>
+    <button id="b_refresh" onclick="tick()">↻ Làm mới</button>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <h2>Nhật ký hoạt động <span id="hbev" style="text-transform:none;letter-spacing:0"></span></h2>
+      <div id="events"><div class="empty">Chưa có hoạt động</div></div>
+    </div>
+    <div class="panel">
+      <h2>Cấu hình</h2>
+      <dl class="kv" id="cfg"></dl>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:16px">
+    <h2>Log bot (stdout/stderr) <span id="logcount" style="text-transform:none;letter-spacing:0"></span></h2>
+    <pre id="logs">đang tải…</pre>
+  </div>
+
+  <div class="foot" id="foot">tự làm mới mỗi 3 giây</div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const TOKEN = new URLSearchParams(location.search).get('token') || '';
+let busy = false;
+
+function fmtDur(s){
+  s = Math.floor(s||0);
+  if (s < 60) return s + 's';
+  const m = Math.floor(s/60), h = Math.floor(m/60), d = Math.floor(h/24);
+  if (s < 3600) return m + 'm ' + (s%60) + 's';
+  if (h < 24) return h + 'h ' + (m%60) + 'm';
+  return d + 'd ' + (h%24) + 'h';
+}
+function fmtTime(ts){
+  if (!ts) return '—';
+  return new Date(ts*1000).toLocaleTimeString('vi-VN', {hour12:false});
+}
+function ago(ts){
+  if (!ts) return 'chưa bao giờ';
+  const d = Date.now()/1000 - ts;
+  if (d < 60) return Math.floor(d) + 's trước';
+  if (d < 3600) return Math.floor(d/60) + 'm trước';
+  return Math.floor(d/3600) + 'h trước';
+}
+function esc(s){
+  return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+async function tick(){
+  try{
+    const r = await fetch('/api/status', {cache:'no-store'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    render(d);
+    $('err').style.display = 'none';
+  } catch(e){
+    $('err').style.display = 'block';
+    $('err').textContent = '⚠️ Không kết nối được dashboard: ' + e.message;
+  }
+}
+
+function render(d){
+  const p = d.process || {}, b = d.bot || {}, c = d.config || {};
+
+  // trạng thái
+  const st = p.status || 'stopped';
+  const alive = p.alive;
+  const pill = $('pill');
+  pill.className = 'pill ' + (alive ? 'running' : (st === 'restarting' ? 'restarting' : st));
+  if (alive) pill.classList.add('live');
+  const names = {running:'Đang chạy', stopped:'Đã dừng', crashed:'Đã chết',
+                 restarting:'Đang khởi động lại', starting:'Đang khởi động'};
+  $('pilltxt').textContent = names[st] || st;
+  $('clock').textContent = new Date().toLocaleString('vi-VN');
+
+  // số liệu
+  $('uptime').textContent = p.uptime ? fmtDur(p.uptime) : '—';
+  // b.pid là pid python THẬT (bot ghi vào heartbeat), p.pid là shim venv.
+  // Hiển thị pid thật để khớp với log và Task Manager.
+  const realPid = b.pid || p.pid;
+  $('pid').textContent = 'pid ' + (realPid || '—') +
+    (p.restarts ? ' · ' + p.restarts + ' lần restart' : '');
+
+  const cn = b.counters || {};
+  $('c_msg').textContent = cn.messages_received ?? '—';
+  $('c_ai').textContent = 'AI calls ' + (cn.ai_calls ?? '—');
+  $('c_written').textContent = cn.entries_written ?? '—';
+  $('c_parsed').textContent = 'đã bóc ' + (cn.entries_parsed ?? '—');
+
+  const errs = cn.errors ?? 0;
+  $('c_err').textContent = errs;
+  $('c_err').style.color = errs ? 'var(--bad)' : 'var(--ok)';
+  $('errsub').textContent = b.last_error ? b.last_error.slice(0,52) : 'không có lỗi';
+  $('errsub').title = b.last_error || '';
+
+  // nút
+  $('b_start').disabled   = busy || p.alive;
+  $('b_stop').disabled    = busy || !p.alive;
+  $('b_restart').disabled = busy;
+
+  // heartbeat age
+  const age = b.seconds_since_update;
+  $('hbev').textContent = age != null
+    ? (b.alive ? '· hoạt động ' + ago(b.last_update) : '· ⚠️ heartbeat cũ ' + fmtDur(age))
+    : '';
+
+  // sự kiện
+  const evs = (b.events || []).slice().reverse();
+  const box = $('events');
+  if (!evs.length){
+    box.innerHTML = '<div class="empty">Chưa có hoạt động</div>';
+  } else {
+    box.innerHTML = evs.map(e => `
+      <div class="ev">
+        <span class="t">${fmtTime(e.ts)}</span>
+        <span class="k k-${esc(e.kind)}">${esc(e.kind)}</span>
+        <span class="x">${esc(e.text||'')}</span>
+      </div>`).join('');
+  }
+
+  // cấu hình
+  const rows = [
+    ['Sổ', c.sheet_backend],
+    ['Sheet ID', c.spreadsheet_id],
+    ['Tab', c.worksheet],
+    ['Model', c.ai_model],
+    ['Base URL', c.ai_base_url],
+    ['Chat cho phép', (c.allowed_chats||[]).join(', ')],
+    ['Bot', b.bot_username ? '@' + b.bot_username : '—'],
+    ['Data dir', c.data_dir],
+  ];
+  $('cfg').innerHTML = rows.map(([k,v]) =>
+    `<dt>${esc(k)}</dt><dd>${esc(v ?? '—')}</dd>`).join('');
+
+  // sổ kết nối
+  if (b.sheet_info){
+    $('cfg').innerHTML += `<dt>Kết nối</dt><dd style="color:var(--ok)">${esc(b.sheet_info)}</dd>`;
+  } else if (b.last_error){
+    $('cfg').innerHTML += `<dt>Kết nối</dt><dd style="color:var(--bad)">lỗi</dd>`;
+  }
+}
+
+async function loadLogs(){
+  try{
+    const r = await fetch('/api/logs?limit=250', {cache:'no-store'});
+    const d = await r.json();
+    const lines = d.lines || [];
+    $('logs').textContent = lines.length ? lines.join('\n') : '(chưa có log)';
+    $('logcount').textContent = lines.length ? '· ' + lines.length + ' dòng' : '';
+    const pre = $('logs');
+    pre.scrollTop = pre.scrollHeight;
+  } catch(e){ /* bỏ qua */ }
+}
+
+async function act(a){
+  if (busy) return;
+  if (a === 'stop' && !confirm('Dừng bot? Bot sẽ không trả lời Telegram cho tới khi bật lại.')) return;
+  busy = true;
+  ['b_start','b_stop','b_restart'].forEach(i => $(i).disabled = true);
+  try{
+    const r = await fetch('/api/' + a, {
+      method:'POST',
+      headers: TOKEN ? {'x-dashboard-token': TOKEN} : {}
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+    $('foot').textContent = a + ': ' + (d.reason || 'ok');
+    await new Promise(r => setTimeout(r, 1200));
+  } catch(e){
+    $('err').style.display = 'block';
+    $('err').textContent = '⚠️ ' + e.message;
+  } finally {
+    busy = false;
+    await tick();
+    await loadLogs();
+  }
+}
+
+tick();
+loadLogs();
+setInterval(tick, 3000);
+setInterval(loadLogs, 5000);
+</script>
+</body>
+</html>

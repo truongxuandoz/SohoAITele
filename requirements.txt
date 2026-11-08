@@ -4,3 +4,6 @@ google-auth==2.35.0
 python-dotenv==1.0.1
 requests==2.32.3
 openpyxl==3.1.5
+# Dashboard giám sát (soho/dashboard.py). Bot không cần nhưng cài chung cho gọn:
+fastapi>=0.115
+uvicorn>=0.30

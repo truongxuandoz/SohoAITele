@@ -24,6 +24,7 @@ from telegram.ext import (
 
 from .ai import Item, parse_image, parse_message
 from .config import config
+from .heartbeat import Heartbeat
 from .money import format_money
 from .pending import Pending, PendingStore
 from .sheets import build_store
@@ -33,6 +34,8 @@ log = logging.getLogger(__name__)
 PENDING = PendingStore(config.data_dir() / "pending.json")
 STORE = None  # khởi tạo trong post_init, tránh crash lúc import
 HEADER_ROW = 2
+# Dashboard đọc file này để biết bot còn sống và đang làm gì
+HB = Heartbeat(config.data_dir() / "status.json")
 
 HELP_TEXT = """<b>SoHo AI</b> — ghi sổ tự động bằng AI
 
@@ -267,6 +270,11 @@ async def _handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
     message = update.effective_message
     chat_id = update.effective_chat.id
 
+    chat = update.effective_chat
+    where = getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(chat_id)
+    HB.bump("messages_received")
+    HB.event("message", f"{where}: {text[:70]}")
+
     if STORE is None:
         await message.reply_text("Sổ chưa kết nối được, kiểm tra file .env rồi khởi động lại bot.")
         return
@@ -282,15 +290,20 @@ async def _handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
         log.warning("Không đọc được tail: %s", exc)
 
     try:
+        HB.bump("ai_calls")
         items, note = parse_message(
             text, context_rows=context_rows, headers=headers, today=_today_date()
         )
     except Exception as exc:
         log.exception("Lỗi AI")
+        HB.bump("errors")
+        HB.event("error", f"AI: {exc}")
+        HB.ping(last_error=f"AI: {exc}")
         await message.reply_text(f"⚠️ Lỗi gọi AI: {exc}")
         return
 
     if not items:
+        HB.event("empty", f"không có số tiền: {text[:50]}")
         await message.reply_text(
             "Mình chưa thấy số tiền nào trong tin nhắn.\n"
             "Thử lại kiểu: <code>p304 tt 1.480.000 chi soho</code>",
@@ -305,6 +318,9 @@ async def _handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
         return
 
     PENDING.put(chat_id, Pending(items=items, note=note))
+    HB.bump("entries_parsed", len(items))
+    HB.event("parsed", f"{len(items)} bút toán từ: {text[:50]}")
+    HB.ping(last_message=text[:100])
     await _send_preview(message, items, note)
 
 
@@ -454,10 +470,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             written = STORE.append(rows)
         except Exception as exc:
             log.exception("Lỗi ghi sổ")
+            HB.bump("errors")
+            HB.event("error", f"ghi sổ: {exc}")
+            HB.ping(last_error=f"ghi sổ: {exc}")
             await query.edit_message_text(f"⚠️ Lỗi ghi sổ: {exc}")
             return
         PENDING.pop(chat_id)
         span = f"{written[0]}–{written[-1]}" if len(written) > 1 else str(written[0])
+        HB.bump("entries_written", len(written))
+        HB.event("written", f"{len(written)} dòng → dòng {span}")
+        HB.ping()
         await query.edit_message_text(
             f"✅ Đã ghi {len(written)} dòng vào sổ (dòng {span}).\nGõ /undo để xoá nếu sai."
         )
@@ -498,8 +520,21 @@ async def _register_commands(application: Application) -> None:
     log.info("Đã đặt menu lệnh: %s", ", ".join(c for c, _ in BOT_COMMANDS))
 
 
+async def _heartbeat_loop(application: Application) -> None:
+    """Ping định kỳ 30s để dashboard biết bot còn sống (kể cả khi không có tin)."""
+    import asyncio
+    import contextlib
+
+    while True:
+        with contextlib.suppress(Exception):
+            HB.ping()
+        await asyncio.sleep(30)
+
+
 async def post_init(application: Application) -> None:
     global STORE
+    import asyncio
+
     handlers: list[logging.Handler] = [logging.StreamHandler()]
     # Ghi log ra file để đọc lại được (output PowerShell có thể bị buffer/che).
     try:
@@ -517,12 +552,26 @@ async def post_init(application: Application) -> None:
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
     await _register_commands(application)
+
     try:
         STORE = build_store(HEADER_ROW)
         log.info("Kết nối sổ OK: %s", STORE.info())
+        HB.sheet_info = STORE.info()
     except Exception as exc:
         log.error("Không kết nối được sổ: %s", exc)
+        HB.bump("errors")
+        HB.event("error", f"kết nối sổ: {exc}")
+        HB.last_error = f"kết nối sổ: {exc}"
         STORE = None
+
+    HB.bot_username = getattr(application.bot, "username", None)
+    HB.event("started", f"pid {HB.pid}")
+    HB.ping()
+
+    # Task nền: ping đều đặn để dashboard phân biệt "im vì không ai nhắn"
+    # với "chết". Không dùng JobQueue để tránh phụ thuộc extra package.
+    task = asyncio.create_task(_heartbeat_loop(application))
+    application.bot_data["_hb_task"] = task
 
 
 async def on_update_debug(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -530,6 +579,7 @@ async def on_update_debug(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     chat = update.effective_chat
     msg = update.effective_message
     ents = [(e.type, e.offset, e.length) for e in (getattr(msg, "entities", None) or [])]
+    HB.ping()  # có update = bot còn sống
     log.info(
         "RAW update: chat=%s type=%s text=%r entities=%s",
         getattr(chat, "id", None),
@@ -558,6 +608,9 @@ async def log_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.error("Lỗi khi xử lý update", exc_info=context.error)
+    HB.bump("errors")
+    HB.event("error", f"{type(context.error).__name__}: {context.error}")
+    HB.ping(last_error=f"{type(context.error).__name__}: {context.error}")
 
 
 def build_application() -> Application:

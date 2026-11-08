@@ -23,3 +23,6 @@ graft/
 .ruff_cache/
 data/bot.log
 
+
+# Du lieu runtime (heartbeat, log, screenshot)
+data/
