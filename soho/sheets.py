@@ -43,6 +43,32 @@ def _is_empty_row(row: list[Any], upto: int = 5) -> bool:
     return not any(str(c).strip() for c in row[:upto])
 
 
+def _to_number(value: Any) -> int:
+    """Ép giá trị ô thành số nguyên đồng. Không đọc được -> 0.
+
+    Ô trên sổ có thể là số thật (1480000), hoặc text ("1.480.000", "159k").
+    """
+    if value in (None, ""):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip()
+    if not text:
+        return 0
+    try:
+        return int(float(text.replace(",", "").replace(".", "").replace(" ", "")))
+    except ValueError:
+        pass
+    # Thử các dạng viết tắt tiếng Việt quen thuộc
+    try:
+        from .money import parse_money
+
+        got = parse_money(text)
+        return int(got) if got else 0
+    except Exception:
+        return 0
+
+
 class SheetStore(Protocol):
     headers: list[str]
 
@@ -102,6 +128,47 @@ class _BaseStore:
     def data_region(self) -> tuple[int, int]:
         return self._data_start, self._data_end
 
+    def read_range(self, start_row: int, end_row: int) -> list[list[str]]:
+        """Đọc NGUYÊN các dòng trong vùng dữ liệu (1-based, tính cả 2 đầu).
+
+        Dùng cho thống kê/ hỏi đáp: cần đọc nhiều hơn tail() mà vẫn chỉ
+        trong vùng dữ liệu thật, không đụng khối Tổng.
+        """
+        raise NotImplementedError
+
+    def stats(self, limit_rows: int = 1000) -> dict[str, Any]:
+        """Tính tổng thu/chi + số dòng. Đi qua read_range của từng backend."""
+        self._refresh_bounds() if hasattr(self, "_refresh_bounds") else None
+        start, end = self.data_region()
+        if end < start:
+            return {"rows": 0, "thu": 0, "chi": 0, "start": start, "end": end}
+
+        first = max(start, end - limit_rows + 1)
+        rows = self.read_range(first, end)
+        cols = self.columns
+        thu_i = cols.get("thu", 2)
+        chi_i = cols.get("chi", 3)
+
+        total_thu = 0
+        total_chi = 0
+        counted = 0
+        for row in rows:
+            t = _to_number(row[thu_i] if thu_i < len(row) else None)
+            c = _to_number(row[chi_i] if chi_i < len(row) else None)
+            if t:
+                total_thu += t
+            if c:
+                total_chi += c
+            if t or c:
+                counted += 1
+        return {
+            "rows": counted,
+            "thu": total_thu,
+            "chi": total_chi,
+            "start": first,
+            "end": end,
+        }
+
 
 class XlsxStore(_BaseStore):
     """Backend Excel local: đọc/ghi file .xlsx bằng openpyxl."""
@@ -147,6 +214,9 @@ class XlsxStore(_BaseStore):
             if len(rows) >= limit:
                 break
         return list(reversed(rows))
+
+    def read_range(self, start_row: int, end_row: int) -> list[list[str]]:
+        return [self._row_values(r) for r in range(start_row, end_row + 1)]
 
     def append(self, rows: list[list[Any]]) -> list[int]:
         self._refresh_bounds()
@@ -244,6 +314,12 @@ class GoogleSheetStore(_BaseStore):
         rng = f"A{start}:E{self._data_end}"
         rows = self.ws.get_values(range_name=rng)
         return [r + [""] * (5 - len(r)) for r in rows]
+
+    def read_range(self, start_row: int, end_row: int) -> list[list[str]]:
+        if end_row < start_row:
+            return []
+        rows = self.ws.get_values(range_name=f"A{start_row}:E{end_row}")
+        return [list(r) + [""] * (5 - len(r)) for r in rows]
 
     def append(self, rows: list[list[Any]]) -> list[int]:
         self._refresh_bounds()

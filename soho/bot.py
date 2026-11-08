@@ -27,6 +27,12 @@ from .config import config
 from .heartbeat import Heartbeat
 from .money import format_money
 from .pending import Pending, PendingStore
+from .report import (
+    answer_question,
+    format_month_summary,
+    looks_like_question,
+    month_summary,
+)
 from .sheets import build_store
 
 log = logging.getLogger(__name__)
@@ -37,32 +43,39 @@ HEADER_ROW = 2
 # Dashboard đọc file này để biết bot còn sống và đang làm gì
 HB = Heartbeat(config.data_dir() / "status.json")
 
-HELP_TEXT = """<b>SoHo AI</b> — ghi sổ tự động bằng AI
+HELP_TEXT = """<b>SoHo AI</b> — ghi sổ & tra cứu bằng AI
 
-Gõ tin nhắn bình thường, bot bóc thành bút toán rồi chờ bạn bấm nút ghi sổ.
-
-<b>Trong GROUP — dùng lệnh /ghi</b>
-Telegram không cho bot đọc tin thường trong group, nên phải dùng lệnh:
-<code>/ghi p304 tt 1.480.000 chi soho</code>
-
-<b>Chat riêng — gõ tự do</b>
+<b>GHI SỔ</b>
+Chat riêng — gõ tự do:
 <code>p304 tt 1.480.000 chi soho</code>
-<code>hôm nay chi 159k cước hotline, thu 1tr2 hoàn ứng</code>
+<code>hôm nay chi 159k cước hotline</code>
 
-<b>Nhiều dòng một lúc</b> (chỉ ở chat riêng) — dán cả khối:
+Group — dùng lệnh:
+<code>/ghi P203, 302, tt đủ 960k, soho</code>
+
+Nhiều dòng một lúc — dán cả khối:
 <code>11/8
 p304 tt 990.000
-suối 10k
-102, 202, 302 mibibar 70k</code>
+suối 10k</code>
 
-<b>Lệnh</b>
-/ghi – ghi sổ (dùng được trong group)
-/id – xem chat_id
+<b>XEM SỔ</b>
+/xem – thống kê thu chi tháng này
+/xem 8 – tháng 8
+/xem 8/2026 – tháng 8 năm 2026
+
+<b>HỎI VỀ SỔ</b>
+/hoi tháng này còn lại bao nhiêu?
+/hoi chi nhiều nhất cho việc gì?
+/hoi tuần này thu được bao nhiêu?
+
+Trong chat riêng chỉ cần gõ câu hỏi, không cần /hoi.
+
+<b>KHÁC</b>
 /tail – 10 dòng cuối của sổ
 /undo – xoá dòng bot vừa ghi
-/help – trợ giúp
+/id – xem chat_id
 
-Gửi <b>ảnh</b> sổ tay / hoá đơn cũng được (ở chat riêng)."""
+Gửi <b>ảnh</b> hoá đơn / sổ tay cũng được — bot đọc rồi bóc."""
 
 
 # ────────────────────────── helpers ──────────────────────────
@@ -184,6 +197,84 @@ async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines.append("Dán dòng này vào ALLOWED_CHAT_ID trong .env:")
         lines.append(f"<code>{chat.id}</code>")
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def cmd_xem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Thống kê thu/chi tháng. Cú pháp: /xem [tháng] [năm]"""
+    if not await _guard(update):
+        return
+    if STORE is None:
+        await update.effective_message.reply_text("Sổ chưa kết nối được.")
+        return
+
+    args = list(context.args or [])
+    month = year = None
+    try:
+        if args:
+            # Nhận "8", "08", "8/2026", "8 2026"
+            part = args[0]
+            if "/" in part:
+                m, y = part.split("/", 1)
+                month, year = int(m), int(y)
+            else:
+                month = int(part)
+            if len(args) > 1 and not year:
+                year = int(args[1])
+    except (ValueError, IndexError):
+        await update.effective_message.reply_text(
+            "Cú pháp: <code>/xem</code> (tháng này)\n"
+            "<code>/xem 8</code> (tháng 8)\n"
+            "<code>/xem 8/2026</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        summary = month_summary(STORE, year=year, month=month)
+    except Exception as exc:
+        log.exception("Lỗi thống kê")
+        HB.bump("errors")
+        HB.event("error", f"xem: {exc}")
+        await update.effective_message.reply_text(f"⚠️ Không đọc được sổ: {exc}")
+        return
+
+    HB.event("report", f"xem tháng {summary['month']}/{summary['year']}")
+    await update.effective_message.reply_text(
+        format_month_summary(summary), parse_mode=ParseMode.HTML
+    )
+
+
+async def cmd_hoi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hỏi tự do về sổ. Cú pháp: /hoi <câu hỏi>"""
+    if not await _guard(update):
+        return
+    if STORE is None:
+        await update.effective_message.reply_text("Sổ chưa kết nối được.")
+        return
+
+    question = " ".join(context.args or []).strip()
+    if not question:
+        await update.effective_message.reply_text(
+            "Cú pháp: <code>/hoi tháng này còn lại bao nhiêu?</code>\n"
+            "Hoặc: <code>/hoi chi nhiều nhất cho việc gì?</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    chat_id = update.effective_chat.id
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    HB.bump("ai_calls")
+    try:
+        answer = answer_question(STORE, question)
+    except Exception as exc:
+        log.exception("Lỗi trả lời câu hỏi")
+        HB.bump("errors")
+        HB.event("error", f"hoi: {exc}")
+        await update.effective_message.reply_text(f"⚠️ Không trả lời được: {exc}")
+        return
+
+    HB.event("answer", question[:60])
+    await update.effective_message.reply_text(answer)
 
 
 async def cmd_ghi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -310,10 +401,27 @@ async def _handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
         return
 
     if not items:
+        # Không thấy số tiền: có thể là CÂU HỎI chứ không phải bút toán.
+        # Ví dụ "kiểm tra dòng tiền tháng này" -> trả lời, đừng báo lỗi.
+        if looks_like_question(text):
+            try:
+                HB.bump("ai_calls")
+                answer = answer_question(STORE, text)
+            except Exception as exc:
+                log.exception("Lỗi trả lời câu hỏi")
+                HB.bump("errors")
+                HB.event("error", f"hoi: {exc}")
+                await message.reply_text(f"⚠️ Không trả lời được: {exc}")
+                return
+            HB.event("answer", text[:60])
+            await message.reply_text(answer)
+            return
+
         HB.event("empty", f"không có số tiền: {text[:50]}")
         await message.reply_text(
             "Mình chưa thấy số tiền nào trong tin nhắn.\n"
-            "Thử lại kiểu: <code>p304 tt 1.480.000 chi soho</code>",
+            "Thử lại kiểu: <code>p304 tt 1.480.000 chi soho</code>\n"
+            "Hoặc hỏi: <code>/hoi tháng này còn lại bao nhiêu?</code>",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -589,6 +697,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 BOT_COMMANDS = [
     ("ghi", "Ghi sổ: /ghi p304 tt 1.480.000 chi soho"),
+    ("xem", "Thống kê thu chi tháng: /xem [tháng]"),
+    ("hoi", "Hỏi về sổ: /hoi tháng này còn bao nhiêu?"),
     ("id", "Xem chat_id"),
     ("tail", "10 dòng cuối của sổ"),
     ("undo", "Xoá dòng bot vừa ghi"),
@@ -722,6 +832,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler("ghi", cmd_ghi))
+    app.add_handler(CommandHandler("xem", cmd_xem))
+    app.add_handler(CommandHandler("hoi", cmd_hoi))
     app.add_handler(CommandHandler("tail", cmd_tail))
     app.add_handler(CommandHandler("undo", cmd_undo))
     app.add_handler(CallbackQueryHandler(on_callback, pattern="^(commit|edit|cancel)$"))
